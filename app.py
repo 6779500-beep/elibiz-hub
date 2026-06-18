@@ -9,6 +9,29 @@ from datetime import datetime
 
 # --- הגדרות דף ---
 st.set_page_config(page_title="CallBiz Hub", page_icon="📞", layout="centered")
+
+# --- הזרקת קוד עיצוב (CSS) ליישור לימין (RTL) ---
+st.markdown("""
+<style>
+/* הפיכת כיווניות האתר לימין-לשמאל */
+.stApp {
+    direction: rtl;
+}
+/* יישור טקסטים וכותרות לימין */
+h1, h2, h3, p, div {
+    text-align: right;
+}
+/* התאמת כפתורים והתראות */
+.stButton>button {
+    float: right;
+}
+.stAlert {
+    direction: rtl;
+    text-align: right;
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("📞 CallBiz Message Hub")
 
 # --- מסד נתונים ---
@@ -42,7 +65,6 @@ def get_all_leads():
 # --- משיכת מיילים ---
 def fetch_emails():
     try:
-        # שימוש בסודות שנגדיר בענן
         EMAIL_ACCOUNT = st.secrets["EMAIL_ACCOUNT"]
         APP_PASSWORD = st.secrets["APP_PASSWORD"]
         TARGET_SENDER = "CallBiz@callbiz.co.il"
@@ -91,7 +113,7 @@ def fetch_emails():
             mail.logout()
             return 0
     except Exception as e:
-        st.error(f"שגיאה בהתחברות למייל. ודא שהסודות מוגדרים נכון.")
+        st.error("שגיאה בהתחברות למייל. ודא שהסודות מוגדרים נכון.")
         return 0
 
 # --- הפעלת המערכת ---
@@ -106,11 +128,21 @@ if st.button("🔄 רענן ובדוק פניות חדשות"):
         else:
             st.info("אין פניות חדשות כרגע.")
 
+st.write("") # שורת רווח
+
 # תצוגת נתונים
 st.subheader("📋 רשימת הפניות")
 df = get_all_leads()
 
 if not df.empty:
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    # שינוי שמות העמודות מאנגלית לעברית
+    df = df.rename(columns={
+        'date': 'תאריך קבלה',
+        'name': 'שם הלקוח',
+        'phone': 'מספר טלפון',
+        'message': 'תוכן הפנייה'
+    })
+    # הצגת הטבלה ללא עמודת ה-ID הפנימית
+    st.dataframe(df.drop(columns=['id']), use_container_width=True, hide_index=True)
 else:
     st.write("עדיין אין פניות במערכת.")
