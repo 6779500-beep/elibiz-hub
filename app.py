@@ -117,22 +117,33 @@ st.html("""
 .urgent-box .urgent-desc { color: #1e293b; font-weight: 600; font-size: 14px; }
 .urgent-box .urgent-meta { color: #8a6300; font-size: 12px; margin-top: 2px; }
 
-/* טבלת לקוחות מותאמת */
+/* טבלת לקוחות מותאמת - תצוגה אוורירית */
 .client-table-header {
-    display: flex; align-items: center; padding: 10px 16px;
-    color: #8a8472; font-size: 12px; font-weight: 700;
-    border-bottom: 2px solid #ece7da;
+    display: flex; align-items: center; padding: 8px 22px;
+    color: #a39c87; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.4px;
 }
 .client-row {
-    display: flex; align-items: center; padding: 14px 16px;
+    display: flex; align-items: center; padding: 18px 22px;
     background: #ffffff; text-decoration: none !important;
-    border-bottom: 1px solid #f1eee5; transition: background 0.15s ease;
+    border-radius: 12px; margin-bottom: 10px;
+    border: 1px solid #f1eee5;
+    box-shadow: 0 1px 4px rgba(31,28,53,0.03);
+    transition: all 0.15s ease;
 }
-.client-row:hover { background: #fbf6e6; }
+.client-row:hover { background: #fffdf6; box-shadow: 0 4px 14px rgba(201,162,39,0.15); transform: translateY(-1px); }
 .client-row.selected { background: #fbf3d6; border-right: 4px solid #c9a227; }
 .client-row .cell { color: #1f2440; font-size: 14px; }
-.client-row .cell-id { color: #8a8472; font-size: 13px; }
+.client-row .cell-id { color: #a39c87; font-size: 13px; }
 .client-row .cell-phone { direction: ltr; text-align: right; }
+.client-row .cell-phone a { color: #1f2440; text-decoration: none; }
+.client-row .cell-phone a:hover { color: #c9a227; }
+
+@media (max-width: 700px) {
+    .client-row { flex-wrap: wrap; gap: 6px; }
+    .client-row .cell-id { display: none; }
+    .client-table-header .cell-id { display: none; }
+}
 
 /* התראה על כפילות אפשרית */
 .dup-warning {
@@ -191,9 +202,20 @@ def init_db():
         ("follow_up_date", "TEXT DEFAULT ''"),
         ("priority", "TEXT DEFAULT ''"),
         ("category", "TEXT DEFAULT ''"),
+        ("updated_at", "TEXT DEFAULT ''"),
     ]:
         if col_name not in existing_cols:
             c.execute(f"ALTER TABLE clients ADD COLUMN {col_name} {col_def}")
+
+    # טבלת היסטוריית סטטוס
+    c.execute('''CREATE TABLE IF NOT EXISTS status_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id INTEGER,
+        old_status TEXT,
+        new_status TEXT,
+        changed_at TEXT DEFAULT (datetime('now','localtime')),
+        FOREIGN KEY(client_id) REFERENCES clients(id)
+    )''')
 
     # טבלת הערות
     c.execute('''CREATE TABLE IF NOT EXISTS notes (
@@ -343,6 +365,85 @@ def add_note(client_id, content):
     conn.execute("INSERT INTO notes (client_id, content) VALUES (?,?)", (client_id, content))
     conn.commit()
     conn.close()
+
+def log_status_change(client_id, old_status, new_status):
+    if old_status == new_status:
+        return
+    conn = sqlite3.connect('crm.db')
+    conn.execute(
+        "INSERT INTO status_history (client_id, old_status, new_status) VALUES (?,?,?)",
+        (client_id, old_status, new_status))
+    conn.commit()
+    conn.close()
+
+def touch_and_bump(client_id):
+    """מסמן עדכון אחרון, ואם הלקוח עדיין בסטטוס 'חדש' מעלה אותו אוטומטית ל'בטיפול'."""
+    conn = sqlite3.connect('crm.db')
+    conn.execute("UPDATE clients SET updated_at=datetime('now','localtime') WHERE id=?", (client_id,))
+    row = conn.execute("SELECT status FROM clients WHERE id=?", (client_id,)).fetchone()
+    if row and row[0] == "חדש":
+        conn.execute("UPDATE clients SET status='בטיפול' WHERE id=?", (client_id,))
+        conn.commit()
+        conn.close()
+        log_status_change(client_id, "חדש", "בטיפול")
+        return
+    conn.commit()
+    conn.close()
+
+def get_status_history(client_id):
+    conn = sqlite3.connect('crm.db')
+    rows = conn.execute(
+        "SELECT old_status, new_status, changed_at FROM status_history WHERE client_id=? ORDER BY changed_at DESC",
+        (client_id,)).fetchall()
+    conn.close()
+    return rows
+
+def get_stats():
+    conn = sqlite3.connect('crm.db')
+    total = conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
+    week_ago = (date.today().toordinal() - 7)
+    week_ago_str = date.fromordinal(week_ago).isoformat()
+    new_this_week = conn.execute(
+        "SELECT COUNT(*) FROM clients WHERE created_at>=?", (week_ago_str,)).fetchone()[0]
+    closed_total = conn.execute("SELECT COUNT(*) FROM clients WHERE status='נסגר'").fetchone()[0]
+    by_status = conn.execute("SELECT status, COUNT(*) FROM clients GROUP BY status").fetchall()
+    by_category = conn.execute(
+        "SELECT category, COUNT(*) FROM clients WHERE category!='' GROUP BY category").fetchall()
+    by_priority = conn.execute(
+        "SELECT priority, COUNT(*) FROM clients WHERE priority!='' GROUP BY priority").fetchall()
+    conn.close()
+    return {
+        "total": total, "new_this_week": new_this_week, "closed_total": closed_total,
+        "by_status": by_status, "by_category": by_category, "by_priority": by_priority,
+    }
+
+def send_daily_digest():
+    import smtplib
+    from email.mime.text import MIMEText
+    leads = get_new_leads()
+    tasks_list = get_urgent_tasks()
+    followups = get_due_followups()
+    lines = ["סיכום יומי - מערכת CallBiz CRM", ""]
+    lines.append(f"📥 פניות חדשות ({len(leads)}):")
+    for l_id, l_name, l_phone, l_created in leads:
+        lines.append(f"  - {l_name} | {l_phone}")
+    lines.append("")
+    lines.append(f"⏰ משימות דחופות ({len(tasks_list)}):")
+    for t_id, t_desc, t_due, c_name, c_id in tasks_list:
+        lines.append(f"  - {t_desc} | לקוח: {c_name} | יעד: {t_due}")
+    lines.append("")
+    lines.append(f"🔁 מועדי טיפול עתידי ({len(followups)}):")
+    for f_id, f_name, f_due in followups:
+        lines.append(f"  - {f_name} | מועד: {f_due}")
+
+    msg = MIMEText("\n".join(lines), _charset="utf-8")
+    msg["Subject"] = "סיכום יומי - CallBiz CRM"
+    msg["From"] = st.secrets["EMAIL_ACCOUNT"]
+    msg["To"] = st.secrets["EMAIL_ACCOUNT"]
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(st.secrets["EMAIL_ACCOUNT"], st.secrets["APP_PASSWORD"])
+        server.send_message(msg)
 
 def find_duplicate_clients(name="", phone="", id_number="", exclude_id=None):
     conn = sqlite3.connect('crm.db')
@@ -505,6 +606,46 @@ if view == "alerts":
             ''', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
+# ===================== מצב 1ב: סטטיסטיקות =====================
+elif view == "stats":
+    st.markdown('<a href="?" target="_self">← חזרה לרשימת הלקוחות</a>', unsafe_allow_html=True)
+    stats = get_stats()
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("📊 סטטיסטיקות כלליות")
+    col_s1, col_s2, col_s3 = st.columns(3)
+    col_s1.metric("סה״כ לקוחות", stats["total"])
+    col_s2.metric("פניות חדשות בשבוע האחרון", stats["new_this_week"])
+    col_s3.metric("תיקים שנסגרו", stats["closed_total"])
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("פילוח לפי סטטוס")
+        for s, cnt in stats["by_status"]:
+            badge = STATUS_BADGE_CLASS.get(s, "status-irrelevant")
+            st.markdown(f'<p><span class="{badge}">{s}</span> &nbsp; {cnt}</p>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    with col_b:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("פילוח לפי סיווג")
+        if not stats["by_category"]:
+            st.info("אין נתונים.")
+        for cat, cnt in stats["by_category"]:
+            badge = CATEGORY_BADGE_CLASS.get(cat, "")
+            st.markdown(f'<p><span class="{badge}">{cat}</span> &nbsp; {cnt}</p>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    with col_c:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("פילוח לפי תיעדוף")
+        if not stats["by_priority"]:
+            st.info("אין נתונים.")
+        for prio, cnt in stats["by_priority"]:
+            badge = PRIORITY_BADGE_CLASS.get(prio, "")
+            st.markdown(f'<p><span class="{badge}">{prio}</span> &nbsp; {cnt}</p>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
 # ===================== מצב 2: תיק לקוח פתוח (מסך מלא) =====================
 elif selected_client_id is not None and get_client(selected_client_id):
     client_id = selected_client_id
@@ -515,7 +656,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
     if client:
         (c_id, c_name, c_phone, c_status, c_created,
          c_id_number, c_phone2, c_phone2_label, c_phone3, c_phone3_label, c_followup,
-         c_priority, c_category) = client
+         c_priority, c_category, c_updated) = client
 
         badges_html = f'<span class="{STATUS_BADGE_CLASS.get(c_status, "status-irrelevant")}">{c_status}</span>'
         if c_priority:
@@ -523,11 +664,14 @@ elif selected_client_id is not None and get_client(selected_client_id):
         if c_category:
             badges_html += f' <span class="{CATEGORY_BADGE_CLASS.get(c_category, "")}">{c_category}</span>'
 
+        last_touch = c_updated or c_created
+
         # כותרת תיק
         st.markdown(f'''
         <div class="client-header">
           <h3>📂 תיק לקוח: {c_name}</h3>
-          <p>📞 {c_phone} &nbsp;|&nbsp; 🗓 נקלט: {c_created[:10] if c_created else "-"}</p>
+          <p>📞 <a href="tel:{c_phone}" style="color:#f3e9c8">{c_phone}</a> &nbsp;|&nbsp; 🗓 נקלט: {c_created[:10] if c_created else "-"}
+          &nbsp;|&nbsp; 🕒 עודכן לאחרונה: {last_touch[:16] if last_touch else "-"}</p>
           <p>{badges_html}</p>
         </div>
         ''', unsafe_allow_html=True)
@@ -586,19 +730,23 @@ elif selected_client_id is not None and get_client(selected_client_id):
                 new_phone3_label = st.selectbox("סוג", options=phone3_labels, index=p3l_idx, key=f"phone3l_{client_id}")
 
             if st.button("💾 שמור פרטים", key=f"save_details_{client_id}"):
+                final_status = "בטיפול" if new_status == "חדש" else new_status
                 conn = sqlite3.connect('crm.db')
                 try:
                     conn.execute(
                         """UPDATE clients SET name=?, phone=?, status=?, id_number=?,
                            phone2=?, phone2_label=?, phone3=?, phone3_label=?, follow_up_date=?,
-                           priority=?, category=?
+                           priority=?, category=?, updated_at=datetime('now','localtime')
                            WHERE id=?""",
-                        (new_name, new_phone, new_status, new_id_number,
+                        (new_name, new_phone, final_status, new_id_number,
                          new_phone2, new_phone2_label, new_phone3, new_phone3_label,
-                         new_followup_date if new_status == "לטיפול עתידי" else "",
+                         new_followup_date if final_status == "לטיפול עתידי" else "",
                          new_priority, new_category,
                          client_id))
                     conn.commit()
+                    log_status_change(client_id, c_status, final_status)
+                    if final_status != new_status:
+                        st.info("הסטטוס עודכן אוטומטית ל'בטיפול' (לא ניתן לשמור שינוי ולהישאר ב'חדש').")
                     st.success("הפרטים נשמרו!")
                     st.rerun()
                 except sqlite3.IntegrityError:
@@ -632,6 +780,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
                     (client_id, uploaded_file.name, filepath))
                 conn.commit()
                 conn.close()
+                touch_and_bump(client_id)
                 st.success(f"הקובץ '{uploaded_file.name}' הועלה בהצלחה!")
                 st.rerun()
 
@@ -674,13 +823,19 @@ elif selected_client_id is not None and get_client(selected_client_id):
                 note_text = st.text_area("הוסף הערה חדשה:", height=100, placeholder="כתוב הערה כאן...")
                 if st.form_submit_button("➕ הוסף הערה"):
                     if note_text.strip():
-                        conn = sqlite3.connect('crm.db')
-                        conn.execute(
-                            "INSERT INTO notes (client_id, content) VALUES (?,?)",
-                            (client_id, note_text.strip()))
-                        conn.commit()
-                        conn.close()
+                        add_note(client_id, note_text.strip())
+                        touch_and_bump(client_id)
                         st.success("ההערה נשמרה!")
+                        st.rerun()
+
+            st.caption("הערות מהירות:")
+            col_q1, col_q2, col_q3 = st.columns(3)
+            quick_notes = [(col_q1, "לא ענה"), (col_q2, "יחזור אלי"), (col_q3, "סוכם מחיר")]
+            for col_q, label in quick_notes:
+                with col_q:
+                    if st.button(label, key=f"quick_note_{label}_{client_id}"):
+                        add_note(client_id, label)
+                        touch_and_bump(client_id)
                         st.rerun()
 
             notes = get_notes(client_id)
@@ -706,6 +861,20 @@ elif selected_client_id is not None and get_client(selected_client_id):
 
             st.markdown('</div>', unsafe_allow_html=True)
 
+            # --- היסטוריית סטטוס ---
+            history = get_status_history(client_id)
+            if history:
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                st.subheader("🕘 היסטוריית סטטוס")
+                for old_s, new_s, changed_at in history:
+                    st.markdown(f'''
+                    <div class="note-item">
+                        <div class="note-text">שונה מ-{old_s or "—"} ל-{new_s}</div>
+                        <div class="note-date">🕐 {changed_at[:16] if changed_at else ""}</div>
+                    </div>
+                    ''', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+
             # --- משימות ---
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.subheader("✅ משימות לביצוע")
@@ -725,6 +894,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
                             (client_id, task_desc.strip(), due_str))
                         conn.commit()
                         conn.close()
+                        touch_and_bump(client_id)
                         st.success("המשימה נוספה!")
                         st.rerun()
 
@@ -747,6 +917,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
                                 (1 if new_done else 0, t_id))
                             conn.commit()
                             conn.close()
+                            touch_and_bump(client_id)
                             st.rerun()
                     with col_desc:
                         style = "text-decoration:line-through;color:#94a3b8" if t_done else ""
@@ -756,7 +927,13 @@ elif selected_client_id is not None and get_client(selected_client_id):
                             unsafe_allow_html=True)
                     with col_due:
                         if t_due:
-                            label = "⚠️ " if is_overdue else "🗓 "
+                            days_overdue = (date.today() - datetime.strptime(t_due, "%Y-%m-%d").date()).days if is_overdue else 0
+                            if days_overdue > 3:
+                                label = f"🔥 באיחור {days_overdue} ימים "
+                            elif is_overdue:
+                                label = "⚠️ "
+                            else:
+                                label = "🗓 "
                             st.markdown(
                                 f"<small style='color:{'#e74c3c' if is_overdue else '#64748b'}'>{label}{t_due}</small>",
                                 unsafe_allow_html=True)
@@ -772,7 +949,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
 
 # ===================== מצב 3: רשימת הלקוחות =====================
 else:
-    col_sync, col_add, col_empty = st.columns([1, 1, 4])
+    col_sync, col_add, col_stats, col_backup, col_digest = st.columns([1, 1, 1, 1, 1])
     with col_sync:
         if st.button("🔄 סנכרן מייל"):
             with st.spinner("מסנכרן..."):
@@ -785,6 +962,21 @@ else:
     with col_add:
         if st.button("➕ הוסף לקוח חדש"):
             st.session_state["show_add_form"] = not st.session_state.get("show_add_form", False)
+    with col_stats:
+        st.markdown('<a href="?view=stats" target="_self"><button style="width:100%;padding:10px;border-radius:8px;border:1px solid #c9a227;background:linear-gradient(135deg,#1f2440,#2b3160);color:#f3e9c8;font-weight:600;cursor:pointer">📊 סטטיסטיקות</button></a>', unsafe_allow_html=True)
+    with col_backup:
+        try:
+            with open("crm.db", "rb") as f:
+                st.download_button("📥 הורד גיבוי", f.read(), file_name=f"crm_backup_{date.today().isoformat()}.db")
+        except FileNotFoundError:
+            pass
+    with col_digest:
+        if st.button("📧 שלח סיכום במייל"):
+            try:
+                send_daily_digest()
+                st.success("הסיכום נשלח למייל שלך!")
+            except Exception as e:
+                st.error(f"שגיאה בשליחה: {e}")
 
     # --- טופס הוספת לקוח ידנית ---
     if st.session_state.get("show_add_form"):
