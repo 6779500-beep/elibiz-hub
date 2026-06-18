@@ -6,13 +6,15 @@ import email
 import re
 from bs4 import BeautifulSoup
 
-# --- הגדרות עיצוב RTL (כמו שהיה כשהכל עבד) ---
+# --- עיצוב הבית (החלק שאהבת) ---
 st.set_page_config(page_title="CallBiz CRM", layout="wide")
 st.markdown("""
 <style>
     .stApp { direction: rtl; text-align: right; font-family: 'Heebo', sans-serif; background-color: #f8f9fa; }
+    .card { background: white; padding: 25px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
     h1 { color: #2c3e50; text-align: center; }
     .stButton>button { width: 100%; border-radius: 8px; background-color: #2c3e50; color: white; font-weight: bold; }
+    [data-testid="stDataFrame"] { direction: rtl; text-align: right; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -37,27 +39,29 @@ def sync_data():
             text = BeautifulSoup(body, "html.parser").get_text()
             phone = re.search(r"(\d{9,10})", text)
             if phone:
-                try:
-                    conn.execute("INSERT INTO clients (name, phone) VALUES (?, ?)", ("לקוח חדש", phone.group(1)))
+                try: conn.execute("INSERT INTO clients (name, phone) VALUES (?, ?)", ("לקוח חדש", phone.group(1)))
                 except: pass
             mail.store(num, "+FLAGS", "\\Seen")
         conn.commit(); return True
     except: return False
     finally: conn.close()
 
-# --- ממשק ---
+# --- ממשק מעוצב ---
 init_db()
-st.title("💼 מערכת CallBiz CRM")
+st.markdown('<div class="card"><h1>💼 מערכת CallBiz CRM</h1></div>', unsafe_allow_html=True)
 
-if st.button("🔄 סנכרן נתונים מהמייל"):
-    if sync_data():
-        st.success("הסנכרון עבר בהצלחה!")
-        st.rerun()
-    else:
-        st.error("שגיאה בסנכרון.")
+col1, col2 = st.columns([1, 3])
+with col1:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    if st.button("🔄 סנכרן נתונים"):
+        if sync_data(): st.success("הסנכרון עבר בהצלחה!"); st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
-st.subheader("📋 לקוחות")
-conn = sqlite3.connect('crm.db')
-df = pd.read_sql_query("SELECT * FROM clients", conn)
-st.dataframe(df, use_container_width=True)
-conn.close()
+with col2:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("📋 לקוחות")
+    conn = sqlite3.connect('crm.db')
+    df = pd.read_sql_query("SELECT * FROM clients", conn)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    conn.close()
+    st.markdown('</div>', unsafe_allow_html=True)
