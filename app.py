@@ -72,6 +72,7 @@ st.html("""
 .status-inprogress { background:#fdf0d5; color:#92660b; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
 .status-closed { background:#e3f5ec; color:#0f7a4e; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
 .status-irrelevant { background:#eef0f2; color:#5b6472; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+.status-followup { background:#f1e7fb; color:#6b2fa0; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
 
 /* תיק לקוח */
 .client-header {
@@ -132,6 +133,22 @@ st.html("""
 .client-row .cell { color: #1f2440; font-size: 14px; }
 .client-row .cell-id { color: #8a8472; font-size: 13px; }
 .client-row .cell-phone { direction: ltr; text-align: right; }
+
+/* התראה על כפילות אפשרית */
+.dup-warning {
+    background: #fdf0d5; border: 1px solid #c9a227; border-right: 4px solid #c9a227;
+    padding: 14px 16px; border-radius: 8px; margin-bottom: 12px; color: #5b4400;
+}
+
+/* רשימת ממתינים בלשונית התראות */
+.pending-item {
+    display: block; text-decoration: none !important; background: #faf9f5;
+    border: 1px solid #ece7da; border-radius: 8px; padding: 10px 14px;
+    margin-bottom: 8px; transition: background 0.15s ease;
+}
+.pending-item:hover { background: #fbf6e6; }
+.pending-item .pending-title { color: #1f2440; font-weight: 600; font-size: 14px; }
+.pending-item .pending-meta { color: #8a8472; font-size: 12px; margin-top: 2px; }
 </style>
 """)
 
@@ -151,6 +168,19 @@ def init_db():
         status TEXT DEFAULT "חדש",
         created_at TEXT DEFAULT (datetime('now','localtime'))
     )''')
+
+    # מיגרציה: עמודות נוספות לכרטיס לקוח (מצורפות בבטחה לטבלה קיימת)
+    existing_cols = {row[1] for row in c.execute("PRAGMA table_info(clients)").fetchall()}
+    for col_name, col_def in [
+        ("id_number", "TEXT DEFAULT ''"),
+        ("phone2", "TEXT DEFAULT ''"),
+        ("phone2_label", "TEXT DEFAULT ''"),
+        ("phone3", "TEXT DEFAULT ''"),
+        ("phone3_label", "TEXT DEFAULT 'נייח'"),
+        ("follow_up_date", "TEXT DEFAULT ''"),
+    ]:
+        if col_name not in existing_cols:
+            c.execute(f"ALTER TABLE clients ADD COLUMN {col_name} {col_def}")
 
     # טבלת הערות
     c.execute('''CREATE TABLE IF NOT EXISTS notes (
@@ -211,13 +241,21 @@ def sync_data():
 
             text = BeautifulSoup(body, "html.parser").get_text()
             phone = re.search(r"(?<!\d)(0[5-9]\d{8})(?!\d)", text)
+            name_match = re.search(r"שם(?: מלא| הלקוח| פונה)?\s*[:\-]\s*(.+)", text)
+            lead_name = name_match.group(1).strip().split("\n")[0][:60] if name_match else "לקוח חדש"
             if phone:
+                phone_value = phone.group(1)
                 try:
                     conn.execute("INSERT INTO clients (name, phone) VALUES (?, ?)",
-                                 ("לקוח חדש", phone.group(1)))
+                                 (lead_name, phone_value))
                     count += 1
                 except sqlite3.IntegrityError:
-                    pass
+                    existing = conn.execute(
+                        "SELECT id FROM clients WHERE phone=?", (phone_value,)).fetchone()
+                    if existing:
+                        conn.execute(
+                            "INSERT INTO notes (client_id, content) VALUES (?,?)",
+                            (existing[0], f"התקבלה פנייה נוספת מהמייל ({lead_name})."))
             mail.store(num, "+FLAGS", "\\Seen")
 
         conn.execute(
@@ -229,10 +267,16 @@ def sync_data():
         return False, str(e)
 
 # --- שאילתות עזר ---
-def get_clients():
+def get_clients(search=""):
     conn = sqlite3.connect('crm.db')
-    df = pd.read_sql_query(
-        "SELECT id, name, phone, status, created_at FROM clients ORDER BY id DESC", conn)
+    query = "SELECT id, name, phone, phone2, id_number, status, created_at FROM clients"
+    params = ()
+    if search.strip():
+        query += " WHERE name LIKE ? OR phone LIKE ? OR phone2 LIKE ? OR phone3 LIKE ? OR id_number LIKE ?"
+        like = f"%{search.strip()}%"
+        params = (like, like, like, like, like)
+    query += " ORDER BY id DESC"
+    df = pd.read_sql_query(query, conn, params=params)
     conn.close()
     return df
 
@@ -243,8 +287,12 @@ def get_alerts():
     urgent_tasks = conn.execute(
         "SELECT COUNT(*) FROM tasks WHERE is_done=0 AND due_date<=? AND due_date!=''", (today,)
     ).fetchone()[0]
+    due_followups = conn.execute(
+        "SELECT COUNT(*) FROM clients WHERE status='לטיפול עתידי' AND follow_up_date!='' AND follow_up_date<=?",
+        (today,)
+    ).fetchone()[0]
     conn.close()
-    return new_count, urgent_tasks
+    return new_count, urgent_tasks, due_followups
 
 def get_urgent_tasks():
     conn = sqlite3.connect('crm.db')
@@ -257,6 +305,54 @@ def get_urgent_tasks():
     """, (today,)).fetchall()
     conn.close()
     return rows
+
+def get_due_followups():
+    conn = sqlite3.connect('crm.db')
+    today = date.today().isoformat()
+    rows = conn.execute("""
+        SELECT id, name, follow_up_date FROM clients
+        WHERE status='לטיפול עתידי' AND follow_up_date!='' AND follow_up_date<=?
+        ORDER BY follow_up_date ASC
+    """, (today,)).fetchall()
+    conn.close()
+    return rows
+
+def get_new_leads():
+    conn = sqlite3.connect('crm.db')
+    rows = conn.execute(
+        "SELECT id, name, phone, created_at FROM clients WHERE status='חדש' ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return rows
+
+def add_note(client_id, content):
+    conn = sqlite3.connect('crm.db')
+    conn.execute("INSERT INTO notes (client_id, content) VALUES (?,?)", (client_id, content))
+    conn.commit()
+    conn.close()
+
+def find_duplicate_clients(name="", phone="", id_number="", exclude_id=None):
+    conn = sqlite3.connect('crm.db')
+    matches = {}
+    if phone:
+        for row in conn.execute(
+            "SELECT id, name, phone, status FROM clients WHERE phone=? OR phone2=? OR phone3=?",
+            (phone, phone, phone)).fetchall():
+            matches[row[0]] = (*row, "טלפון")
+    if id_number:
+        for row in conn.execute(
+            "SELECT id, name, phone, status FROM clients WHERE id_number=? AND id_number!=''",
+            (id_number,)).fetchall():
+            matches.setdefault(row[0], (*row, "תעודת זהות"))
+    if name.strip():
+        for row in conn.execute(
+            "SELECT id, name, phone, status FROM clients WHERE name=? AND name!='' AND name!='לקוח חדש'",
+            (name.strip(),)).fetchall():
+            matches.setdefault(row[0], (*row, "שם"))
+    conn.close()
+    if exclude_id is not None:
+        matches.pop(exclude_id, None)
+    return list(matches.values())
 
 def get_client(client_id):
     conn = sqlite3.connect('crm.db')
@@ -300,97 +396,97 @@ st.markdown('''
 </div>
 ''', unsafe_allow_html=True)
 
-# --- שורת התראות ---
-new_leads, urgent_tasks = get_alerts()
+STATUS_BADGE_CLASS = {
+    "חדש": "status-new",
+    "בטיפול": "status-inprogress",
+    "לטיפול עתידי": "status-followup",
+    "נסגר": "status-closed",
+    "לא רלוונטי": "status-irrelevant",
+}
+STATUS_OPTIONS = ["חדש", "בטיפול", "לטיפול עתידי", "נסגר", "לא רלוונטי"]
+
+# --- ניתוב לפי פרמטרי כתובת ---
+view = st.query_params.get("view")
+selected_client_id = st.query_params.get("client_id")
+selected_client_id = int(selected_client_id) if selected_client_id else None
+
+# --- שורת התראות (לחיצה פותחת את רשימת הממתינים) ---
+new_leads, urgent_tasks, due_followups = get_alerts()
 alerts_html = '<div class="alert-bar">🔔 <strong>התראות:</strong>'
 if new_leads > 0:
-    alerts_html += f'&nbsp;<span class="alert-badge">📥 {new_leads} פניות חדשות לטיפול</span>'
+    alerts_html += f'&nbsp;<a href="?view=alerts" target="_self" class="alert-badge" style="color:white">📥 {new_leads} פניות חדשות לטיפול</a>'
 else:
     alerts_html += '&nbsp;<span style="font-size:13px;opacity:0.7">אין פניות חדשות</span>'
 if urgent_tasks > 0:
-    alerts_html += f'&nbsp;<span class="alert-badge-warn">⚡ {urgent_tasks} משימות דחופות להיום</span>'
-else:
+    alerts_html += f'&nbsp;<a href="?view=alerts" target="_self" class="alert-badge-warn" style="color:#1f1500">⚡ {urgent_tasks} משימות דחופות להיום</a>'
+if due_followups > 0:
+    alerts_html += f'&nbsp;<a href="?view=alerts" target="_self" class="alert-badge-warn" style="color:#1f1500">🔁 {due_followups} מועדי טיפול עתידי</a>'
+if urgent_tasks == 0 and due_followups == 0:
     alerts_html += '&nbsp;<span style="font-size:13px;opacity:0.7"> | אין משימות דחופות</span>'
 alerts_html += '</div>'
 st.markdown(alerts_html, unsafe_allow_html=True)
 
-# --- לוח משימות דחופות גלובלי ---
-urgent_list = get_urgent_tasks()
-if urgent_list:
+# ===================== מצב 1: לשונית התראות/ממתינים =====================
+if view == "alerts":
+    st.markdown('<a href="?" target="_self">← חזרה לרשימת הלקוחות</a>', unsafe_allow_html=True)
+
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("⏰ משימות דחופות מכל הלקוחות")
-    today_str = date.today().isoformat()
-    for t_id, t_desc, t_due, c_name, c_id in urgent_list:
-        label = "באיחור" if t_due < today_str else "להיום"
-        st.markdown(f'''
-        <div class="urgent-box">
-            <div class="urgent-desc">{t_desc}</div>
-            <div class="urgent-meta">👤 {c_name} &nbsp;|&nbsp; 🗓 {t_due} ({label})</div>
-        </div>
-        ''', unsafe_allow_html=True)
+    st.subheader("📥 פניות חדשות")
+    leads = get_new_leads()
+    if not leads:
+        st.info("אין פניות חדשות.")
+    else:
+        for l_id, l_name, l_phone, l_created in leads:
+            st.markdown(f'''
+            <a class="pending-item" href="?client_id={l_id}" target="_self">
+                <div class="pending-title">👤 {l_name}</div>
+                <div class="pending-meta">📞 {l_phone} &nbsp;|&nbsp; 🗓 התקבל: {l_created[:10] if l_created else "-"}</div>
+            </a>
+            ''', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- כפתור סנכרון ---
-col_sync, col_empty = st.columns([1, 5])
-with col_sync:
-    if st.button("🔄 סנכרן מייל"):
-        with st.spinner("מסנכרן..."):
-            ok, result = sync_data()
-        if ok:
-            st.success(f"סנכרון הושלם! נוספו {result} לקוחות חדשים.")
-            st.rerun()
-        else:
-            st.error(f"שגיאה: {result}")
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("⏰ משימות דחופות")
+    urgent_list = get_urgent_tasks()
+    if not urgent_list:
+        st.info("אין משימות דחופות.")
+    else:
+        today_str = date.today().isoformat()
+        for t_id, t_desc, t_due, c_name, c_id in urgent_list:
+            label = "באיחור" if t_due < today_str else "להיום"
+            st.markdown(f'''
+            <a class="pending-item" href="?client_id={c_id}" target="_self">
+                <div class="pending-title">{t_desc}</div>
+                <div class="pending-meta">👤 {c_name} &nbsp;|&nbsp; 🗓 {t_due} ({label})</div>
+            </a>
+            ''', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-STATUS_BADGE_CLASS = {
-    "חדש": "status-new",
-    "בטיפול": "status-inprogress",
-    "נסגר": "status-closed",
-    "לא רלוונטי": "status-irrelevant",
-}
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("🔁 מועדי טיפול עתידי שהגיעו")
+    followups = get_due_followups()
+    if not followups:
+        st.info("אין מועדי טיפול עתידי שהגיעו.")
+    else:
+        for f_id, f_name, f_due in followups:
+            st.markdown(f'''
+            <a class="pending-item" href="?client_id={f_id}" target="_self">
+                <div class="pending-title">👤 {f_name}</div>
+                <div class="pending-meta">🗓 מועד טיפול: {f_due}</div>
+            </a>
+            ''', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# --- טבלת לקוחות ---
-st.markdown('<div class="card">', unsafe_allow_html=True)
-st.subheader("📋 רשימת לקוחות")
-
-df = get_clients()
-
-selected_client_id = st.query_params.get("client_id")
-selected_client_id = int(selected_client_id) if selected_client_id else None
-
-if df.empty:
-    st.info("אין לקוחות במערכת. לחץ על 'סנכרן מייל' להוספת לקוחות.")
-else:
-    rows_html = '''
-    <div class="client-table-header">
-        <div class="cell cell-id" style="flex:0 0 70px">מזהה</div>
-        <div class="cell" style="flex:2">שם לקוח</div>
-        <div class="cell" style="flex:1.5">טלפון</div>
-        <div class="cell" style="flex:1">סטטוס</div>
-    </div>
-    '''
-    for _, row in df.iterrows():
-        badge_class = STATUS_BADGE_CLASS.get(row['status'], "status-irrelevant")
-        is_selected = selected_client_id == int(row['id'])
-        rows_html += f'''
-        <a class="client-row{' selected' if is_selected else ''}" href="?client_id={int(row['id'])}" target="_self">
-            <div class="cell cell-id" style="flex:0 0 70px">{int(row['id'])}</div>
-            <div class="cell" style="flex:2">{row['name']}</div>
-            <div class="cell cell-phone" style="flex:1.5">{row['phone']}</div>
-            <div class="cell" style="flex:1"><span class="{badge_class}">{row['status']}</span></div>
-        </a>
-        '''
-    st.html(rows_html)
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# --- תיק לקוח ---
-if selected_client_id is not None:
+# ===================== מצב 2: תיק לקוח פתוח (מסך מלא) =====================
+elif selected_client_id is not None and get_client(selected_client_id):
     client_id = selected_client_id
     client = get_client(client_id)
 
+    st.markdown('<a href="?" target="_self">← חזרה לרשימת הלקוחות</a>', unsafe_allow_html=True)
+
     if client:
-        c_id, c_name, c_phone, c_status, c_created = client
+        (c_id, c_name, c_phone, c_status, c_created,
+         c_id_number, c_phone2, c_phone2_label, c_phone3, c_phone3_label, c_followup) = client
 
         # כותרת תיק
         st.markdown(f'''
@@ -412,17 +508,48 @@ if selected_client_id is not None:
             with col2:
                 new_phone = st.text_input("מספר טלפון", value=c_phone, key=f"phone_{client_id}")
 
-            status_options = ["חדש", "בטיפול", "נסגר", "לא רלוונטי"]
-            status_idx = status_options.index(c_status) if c_status in status_options else 0
-            new_status = st.selectbox("סטטוס פנייה", options=status_options,
-                                       index=status_idx, key=f"status_{client_id}")
+            col_id, col_status = st.columns(2)
+            with col_id:
+                new_id_number = st.text_input("תעודת זהות", value=c_id_number or "", key=f"idnum_{client_id}")
+            with col_status:
+                status_idx = STATUS_OPTIONS.index(c_status) if c_status in STATUS_OPTIONS else 0
+                new_status = st.selectbox("סטטוס פנייה", options=STATUS_OPTIONS,
+                                           index=status_idx, key=f"status_{client_id}")
+
+            new_followup_date = c_followup
+            if new_status == "לטיפול עתידי":
+                followup_value = datetime.strptime(c_followup, "%Y-%m-%d").date() if c_followup else None
+                followup_input = st.date_input("מועד טיפול עתידי", value=followup_value, key=f"followup_{client_id}")
+                new_followup_date = followup_input.isoformat() if followup_input else ""
+
+            st.markdown("##### טלפונים נוספים")
+            col_p2, col_p2l = st.columns([2, 1])
+            with col_p2:
+                new_phone2 = st.text_input("טלפון נוסף", value=c_phone2 or "", key=f"phone2_{client_id}")
+            with col_p2l:
+                phone2_labels = ["", "בעל", "אישה", "אחר"]
+                p2l_idx = phone2_labels.index(c_phone2_label) if c_phone2_label in phone2_labels else 0
+                new_phone2_label = st.selectbox("שייך ל-", options=phone2_labels, index=p2l_idx, key=f"phone2l_{client_id}")
+
+            col_p3, col_p3l = st.columns([2, 1])
+            with col_p3:
+                new_phone3 = st.text_input("טלפון בבית", value=c_phone3 or "", key=f"phone3_{client_id}")
+            with col_p3l:
+                phone3_labels = ["נייח", "בעל", "אישה"]
+                p3l_idx = phone3_labels.index(c_phone3_label) if c_phone3_label in phone3_labels else 0
+                new_phone3_label = st.selectbox("סוג", options=phone3_labels, index=p3l_idx, key=f"phone3l_{client_id}")
 
             if st.button("💾 שמור פרטים", key=f"save_details_{client_id}"):
                 conn = sqlite3.connect('crm.db')
                 try:
                     conn.execute(
-                        "UPDATE clients SET name=?, phone=?, status=? WHERE id=?",
-                        (new_name, new_phone, new_status, client_id))
+                        """UPDATE clients SET name=?, phone=?, status=?, id_number=?,
+                           phone2=?, phone2_label=?, phone3=?, phone3_label=?, follow_up_date=?
+                           WHERE id=?""",
+                        (new_name, new_phone, new_status, new_id_number,
+                         new_phone2, new_phone2_label, new_phone3, new_phone3_label,
+                         new_followup_date if new_status == "לטיפול עתידי" else "",
+                         client_id))
                     conn.commit()
                     st.success("הפרטים נשמרו!")
                     st.rerun()
@@ -594,3 +721,156 @@ if selected_client_id is not None:
                             st.rerun()
 
             st.markdown('</div>', unsafe_allow_html=True)
+
+# ===================== מצב 3: רשימת הלקוחות =====================
+else:
+    col_sync, col_add, col_empty = st.columns([1, 1, 4])
+    with col_sync:
+        if st.button("🔄 סנכרן מייל"):
+            with st.spinner("מסנכרן..."):
+                ok, result = sync_data()
+            if ok:
+                st.success(f"סנכרון הושלם! נוספו {result} לקוחות חדשים.")
+                st.rerun()
+            else:
+                st.error(f"שגיאה: {result}")
+    with col_add:
+        if st.button("➕ הוסף לקוח חדש"):
+            st.session_state["show_add_form"] = not st.session_state.get("show_add_form", False)
+
+    # --- טופס הוספת לקוח ידנית ---
+    if st.session_state.get("show_add_form"):
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("➕ הוספת לקוח חדש")
+
+        with st.form(key="add_client_form", clear_on_submit=False):
+            col_n, col_p = st.columns(2)
+            with col_n:
+                add_name = st.text_input("שם לקוח")
+            with col_p:
+                add_phone = st.text_input("מספר טלפון")
+            add_id_number = st.text_input("תעודת זהות (לא חובה)")
+            submitted = st.form_submit_button("שמור לקוח")
+
+        if submitted:
+            if not add_name.strip() or not add_phone.strip():
+                st.error("יש למלא שם וטלפון.")
+            else:
+                matches = find_duplicate_clients(add_name, add_phone.strip(), add_id_number.strip())
+                phone_matches = [m for m in matches if m[4] == "טלפון"]
+                other_matches = [m for m in matches if m[4] != "טלפון"]
+
+                if phone_matches:
+                    existing = phone_matches[0]
+                    add_note(existing[0], f"נוצרה פנייה ידנית נוספת בשם '{add_name.strip()}'.")
+                    st.warning(f"מספר הטלפון כבר קיים ללקוח '{existing[1]}' (מזהה {existing[0]}) — נוספה הערה לתיק הקיים במקום פתיחת תיק כפול.")
+                elif other_matches:
+                    st.session_state["pending_client"] = {
+                        "name": add_name.strip(), "phone": add_phone.strip(),
+                        "id_number": add_id_number.strip(),
+                    }
+                    st.session_state["dup_matches"] = other_matches
+                    st.rerun()
+                else:
+                    conn = sqlite3.connect('crm.db')
+                    try:
+                        conn.execute(
+                            "INSERT INTO clients (name, phone, id_number) VALUES (?,?,?)",
+                            (add_name.strip(), add_phone.strip(), add_id_number.strip()))
+                        conn.commit()
+                        st.session_state["show_add_form"] = False
+                        st.success("הלקוח נוסף בהצלחה!")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("מספר הטלפון כבר קיים במערכת.")
+                    finally:
+                        conn.close()
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- אזהרת כפילות אפשרית: בחירה למזג או להשאיר נפרד ---
+    if st.session_state.get("pending_client"):
+        pending = st.session_state["pending_client"]
+        dup_matches = st.session_state["dup_matches"]
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        match_lines = "".join(
+            f"<li>{m[1]} — {m[2]} (מזהה {m[0]}, התאמה לפי {m[4]})</li>" for m in dup_matches
+        )
+        st.markdown(f'''
+        <div class="dup-warning">
+            <strong>⚠ נמצא לקוח קיים עם פרטים תואמים</strong>
+            <ul>{match_lines}</ul>
+            האם למזג את הפנייה לתיק הקיים, או להשאיר כתיק לקוח נפרד?
+        </div>
+        ''', unsafe_allow_html=True)
+
+        col_merge, col_separate = st.columns(2)
+        with col_merge:
+            if st.button("🔗 מזג לתיק הקיים"):
+                existing_id = dup_matches[0][0]
+                add_note(existing_id, f"מוזגה פנייה ידנית: '{pending['name']}', טלפון {pending['phone']}.")
+                conn = sqlite3.connect('crm.db')
+                row = conn.execute("SELECT id_number, phone2 FROM clients WHERE id=?", (existing_id,)).fetchone()
+                if pending["id_number"] and not row[0]:
+                    conn.execute("UPDATE clients SET id_number=? WHERE id=?", (pending["id_number"], existing_id))
+                if pending["phone"] and not row[1]:
+                    conn.execute("UPDATE clients SET phone2=? WHERE id=?", (pending["phone"], existing_id))
+                conn.commit()
+                conn.close()
+                st.session_state.pop("pending_client", None)
+                st.session_state.pop("dup_matches", None)
+                st.session_state["show_add_form"] = False
+                st.success("הפנייה מוזגה לתיק הקיים.")
+                st.rerun()
+        with col_separate:
+            if st.button("📁 השאר כתיק נפרד"):
+                conn = sqlite3.connect('crm.db')
+                try:
+                    conn.execute(
+                        "INSERT INTO clients (name, phone, id_number) VALUES (?,?,?)",
+                        (pending["name"], pending["phone"], pending["id_number"]))
+                    conn.commit()
+                    st.session_state.pop("pending_client", None)
+                    st.session_state.pop("dup_matches", None)
+                    st.session_state["show_add_form"] = False
+                    st.success("נפתח תיק לקוח נפרד.")
+                    st.rerun()
+                except sqlite3.IntegrityError:
+                    st.error("מספר הטלפון כבר קיים במערכת.")
+                finally:
+                    conn.close()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- חיפוש ---
+    search_term = st.text_input("🔍 חיפוש לפי שם, טלפון או תעודת זהות", key="client_search")
+
+    # --- טבלת לקוחות ---
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("📋 רשימת לקוחות")
+
+    df = get_clients(search_term)
+
+    if df.empty:
+        st.info("לא נמצאו לקוחות.")
+    else:
+        rows_html = '''
+        <div class="client-table-header">
+            <div class="cell cell-id" style="flex:0 0 70px">מזהה</div>
+            <div class="cell" style="flex:2">שם לקוח</div>
+            <div class="cell" style="flex:1.5">טלפון</div>
+            <div class="cell" style="flex:1">סטטוס</div>
+        </div>
+        '''
+        for _, row in df.iterrows():
+            badge_class = STATUS_BADGE_CLASS.get(row['status'], "status-irrelevant")
+            rows_html += f'''
+            <a class="client-row" href="?client_id={int(row['id'])}" target="_self">
+                <div class="cell cell-id" style="flex:0 0 70px">{int(row['id'])}</div>
+                <div class="cell" style="flex:2">{row['name']}</div>
+                <div class="cell cell-phone" style="flex:1.5">{row['phone']}</div>
+                <div class="cell" style="flex:1"><span class="{badge_class}">{row['status']}</span></div>
+            </a>
+            '''
+        st.html(rows_html)
+
+    st.markdown('</div>', unsafe_allow_html=True)
