@@ -14,8 +14,12 @@ st.set_page_config(page_title="CallBiz CRM", layout="wide")
 
 st.html("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&family=Frank+Ruhl+Libre:wght@500;700;900&display=swap');
 * { font-family: 'Heebo', sans-serif !important; }
+[data-testid="stHeading"] h1, [data-testid="stHeading"] h2, [data-testid="stHeading"] h3,
+.brand-name, .main-title, .client-header h3 {
+    font-family: 'Frank Ruhl Libre', serif !important;
+}
 html { font-size: 19px !important; }
 body, [data-testid="stAppViewContainer"], [data-testid="stMain"] { font-size: 1rem !important; }
 .stApp {
@@ -173,18 +177,25 @@ h1, h2, h3 { color: #1f2440; }
 .urgent-box .urgent-desc { color: #1e293b; font-weight: 600; font-size: 14px; }
 .urgent-box .urgent-meta { color: #8a6300; font-size: 12px; margin-top: 2px; }
 
-/* טבלת לקוחות מותאמת - תצוגה אוורירית, עם עריכה מהירה בתוך השורה */
+/* טבלת לקוחות מותאמת - תצוגה אוורירית אך קומפקטית, עם עריכה מהירה בתוך השורה */
 .client-row-inline {
-    background: #ffffff; border-radius: 12px; margin-bottom: 10px;
-    border: 1px solid #f1eee5; padding: 14px 18px 2px 18px;
+    background: #ffffff; border-radius: 12px; margin-bottom: 8px;
+    border: 1px solid #f1eee5; padding: 8px 18px; padding-bottom: 0;
     box-shadow: 0 1px 4px rgba(31,28,53,0.03);
     transition: box-shadow 0.15s ease;
 }
 .client-row-inline:hover { box-shadow: 0 4px 14px rgba(201,162,39,0.15); }
-.cell-id { color: #a39c87; font-size: 13px; }
-.row-name-link { color: #1f2440; font-weight: 700; font-size: 15px; text-decoration: none; }
+.client-row-inline [data-testid="stVerticalBlock"] { gap: 0.25rem !important; }
+.client-row-inline [data-testid="stHorizontalBlock"] { gap: 0.5rem !important; margin: 0 !important; }
+.client-row-inline [data-testid="stWidgetLabel"] { margin-bottom: 0 !important; }
+.client-row-inline [data-testid="stWidgetLabel"] p { font-size: 0.82rem !important; }
+.client-row-inline .stSelectbox div[data-baseweb="select"] > div { min-height: 36px !important; padding-top: 0 !important; padding-bottom: 0 !important; }
+.client-row-inline .stSelectbox div[data-baseweb="select"] * { font-size: 0.92rem !important; }
+.row-identity { display: flex; flex-direction: column; gap: 1px; padding: 4px 0; }
+.cell-id { color: #a39c87; font-size: 0.78rem !important; }
+.row-name-link { color: #1f2440; font-weight: 700 !important; font-size: 1.05rem !important; text-decoration: none; }
 .row-name-link:hover { color: #c9a227; }
-.cell-phone-text { color: #1f2440; direction: ltr; text-align: right; display: inline-block; }
+.cell-phone-text { color: #1f2440; direction: ltr; text-align: right; display: inline-block; font-size: 0.95rem !important; }
 
 /* התאמה לנייד */
 @media (max-width: 700px) {
@@ -1259,10 +1270,13 @@ else:
             st.markdown('<div class="client-row-inline">', unsafe_allow_html=True)
             col_name, col_status, col_priority, col_category = st.columns([2.2, 1.2, 1.2, 1.2])
             with col_name:
-                st.markdown(f"<span class='cell-id'>מזהה {cid}</span>", unsafe_allow_html=True)
-                st.markdown(f"<a class='row-name-link' href='?client_id={cid}' target='_self'>👤 {row['name']}</a>",
-                             unsafe_allow_html=True)
-                st.markdown(f"<span class='cell-phone-text'>📞 {row['phone']}</span>", unsafe_allow_html=True)
+                st.markdown(f'''
+                <div class="row-identity">
+                    <div class="cell-id">מזהה {cid}</div>
+                    <a class="row-name-link" href="?client_id={cid}" target="_self">👤 {row['name']}</a>
+                    <div class="cell-phone-text">📞 {row['phone']}</div>
+                </div>
+                ''', unsafe_allow_html=True)
             with col_status:
                 s_idx = STATUS_OPTIONS.index(row['status']) if row['status'] in STATUS_OPTIONS else 0
                 sel_status = st.selectbox("סטטוס", STATUS_OPTIONS, index=s_idx, key=f"list_status_{cid}")
