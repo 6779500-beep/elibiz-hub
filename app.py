@@ -3,38 +3,40 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 
-# --- הגדרות דף ---
-st.set_page_config(page_title="CallBiz CRM", page_icon="💼", layout="wide")
-
-# --- עיצוב פסטלי רך (Soft Pastel Theme) ---
+# --- עיצוב וצבעים רכים ---
 st.markdown("""
 <style>
 .stApp { direction: rtl; background-color: #fcfcfc; }
-/* כרטיסייה רכה */
-.card { background-color: #ffffff; padding: 20px; border-radius: 15px; border: 1px solid #eef2f3; box-shadow: 0 4px 10px rgba(0,0,0,0.03); }
-/* סרגל התראות בולט אך נעים */
-.sticky-alert { background-color: #fff9e6; border-right: 5px solid #ffcc00; padding: 15px; border-radius: 8px; margin-bottom: 20px; color: #5c4a00; }
-/* גופן נקי */
-@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;600&display=swap');
-body, .stApp { font-family: 'Heebo', sans-serif; }
+.urgent-box { background-color: #fffaf0; border-right: 5px solid #ffb347; padding: 15px; border-radius: 10px; margin-bottom: 10px; }
+.task-item { background-color: #ffffff; padding: 10px; border-radius: 8px; border: 1px solid #e0e0e0; margin-bottom: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- לוגיקה של סרגל התראות ---
-def show_notification_bar():
+# --- פונקציית ריכוז משימות דחופות ---
+def show_global_urgent_tasks():
     today = datetime.now().strftime("%Y-%m-%d")
     conn = sqlite3.connect('crm.db')
-    urgent_tasks = pd.read_sql_query(f"SELECT task_desc, due_date FROM tasks WHERE status='פתוחה' AND due_date <= '{today}'", conn)
+    # שליפת משימות פתוחות מהיום או עבר
+    df = pd.read_sql_query(f"""
+        SELECT t.id, t.task_desc, t.due_date, c.name, t.client_id 
+        FROM tasks t JOIN clients c ON t.client_id = c.id 
+        WHERE t.status = 'פתוחה' AND t.due_date <= '{today}'
+        ORDER BY t.due_date ASC
+    """, conn)
     conn.close()
     
-    if not urgent_tasks.empty:
-        st.markdown(f"<div class='sticky-alert'>⚠️ <b>יש לך {len(urgent_tasks)} משימות שמחכות לטיפולך עכשיו!</b></div>", unsafe_allow_html=True)
+    if not df.empty:
+        st.subheader("🚩 מרכז משימות דחופות לטיפול")
+        for _, row in df.iterrows():
+            st.markdown(f"""
+            <div class='urgent-box'>
+                <strong>{row['task_desc']}</strong><br>
+                לקוח: {row['name']} | תאריך יעד: {row['due_date']}
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.success("אין משימות דחופות כרגע - הכל בשליטה!")
 
-# --- פונקציות מסד נתונים (אותן פונקציות קודמות, אין שינוי) ---
-# [הפונקציות init_db, save_incoming_lead, וכו' נשארות כפי שהן...]
-# (הדבק כאן את הלוגיקה שלך מהקוד הקודם כדי לשמור על רצף)
-
-# --- הצגת האתר ---
-show_notification_bar() # כאן הקסם קורה, זה יופיע בראש העמוד
-st.title("💼 CallBiz CRM - מרכז ניהול אישי")
-# ... (שאר הקוד של הטאבים והניהול נשאר כפי שסיכמנו) ...
+# --- שילוב בדשבורד הראשי ---
+# תחת ה-Dashboard הקיים, נוסיף קריאה לפונקציה:
+# show_global_urgent_tasks()
