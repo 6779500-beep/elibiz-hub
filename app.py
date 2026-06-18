@@ -5,30 +5,29 @@ import imaplib
 import email
 import re
 from bs4 import BeautifulSoup
-from datetime import datetime
 
-# עיצוב מוחלט
+# --- עיצוב יוקרתי ---
 st.set_page_config(page_title="CallBiz CRM", layout="wide")
 st.markdown("""
 <style>
-    .stApp { direction: rtl; text-align: right; font-family: 'Heebo', sans-serif; background-color: #f8f9fa; }
-    .stDataFrame { direction: rtl; text-align: right; }
-    .card { background-color: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    .stApp { direction: rtl; font-family: 'Heebo', sans-serif; background-color: #f8f9fa; }
+    .main-header { color: #2c3e50; text-align: center; font-size: 2.5rem; margin-bottom: 20px; }
+    .stats-card { background: white; padding: 20px; border-radius: 12px; border: 1px solid #dee2e6; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
+    .stButton>button { background-color: #2c3e50; color: white; border-radius: 8px; width: 100%; }
 </style>
 """, unsafe_allow_html=True)
 
-# בסיס נתונים
+# --- לוגיקה וניקוי ---
 def init_db():
     conn = sqlite3.connect('crm.db')
     c = conn.cursor()
-    c.execute('CREATE TABLE IF NOT EXISTS clients (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, phone TEXT UNIQUE, status TEXT DEFAULT "חדש")')
-    c.execute('CREATE TABLE IF NOT EXISTS tasks (client_id INTEGER, task_desc TEXT, due_date TEXT, status TEXT DEFAULT "פתוחה")')
+    c.execute('CREATE TABLE IF NOT EXISTS clients (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, phone TEXT UNIQUE, status TEXT DEFAULT "חדש", notes TEXT)')
+    c.execute('CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER, desc TEXT, status TEXT DEFAULT "פתוחה")')
     conn.commit(); conn.close()
 
-# סנכרון וניקוי כפילויות
-def sync_data():
+def sync_crm():
+    conn = sqlite3.connect('crm.db')
     try:
-        conn = sqlite3.connect('crm.db')
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(st.secrets["EMAIL_ACCOUNT"], st.secrets["APP_PASSWORD"])
         mail.select("inbox")
@@ -40,26 +39,31 @@ def sync_data():
             text = BeautifulSoup(body, "html.parser").get_text()
             phone = re.search(r"(\d{9,10})", text)
             if phone:
-                try:
-                    conn.execute("INSERT INTO clients (name, phone) VALUES (?, ?)", ("לקוח חדש", phone.group(1)))
-                except: pass
+                conn.execute("INSERT OR IGNORE INTO clients (name, phone) VALUES (?, ?)", ("לקוח חדש", phone.group(1)))
             mail.store(num, "+FLAGS", "\\Seen")
-        # ניקוי סופי
         conn.execute("DELETE FROM clients WHERE phone='-' OR phone='' OR phone IS NULL")
-        conn.commit(); conn.close(); mail.logout()
-        return True
+        conn.commit(); return True
     except: return False
+    finally: conn.close()
 
-# ממשק
+# --- ממשק מושלם ---
 init_db()
-st.title("💼 מערכת CallBiz CRM")
-if st.button("🔄 סנכרן ורענן את הנתונים"):
-    if sync_data(): st.success("הנתונים סונכרנו בהצלחה!")
-    else: st.error("שגיאה בסנכרון.")
-    st.rerun()
+st.markdown("<h1 class='main-header'>💼 CallBiz CRM</h1>", unsafe_allow_html=True)
 
-st.subheader("📋 רשימת לקוחות פעילים")
-conn = sqlite3.connect('crm.db')
-df = pd.read_sql_query("SELECT * FROM clients", conn)
-st.dataframe(df, use_container_width=True)
-conn.close()
+col1, col2 = st.columns([1, 4])
+with col1:
+    if st.button("🔄 רענן וסנכרן נתונים"):
+        if sync_crm(): st.success("המערכת מעודכנת!")
+        else: st.error("שגיאה בסנכרון.")
+        st.rerun()
+
+tab1, tab2 = st.tabs(["📋 לקוחות וניהול", "🚩 משימות פתוחות"])
+
+with tab1:
+    conn = sqlite3.connect('crm.db')
+    df = pd.read_sql_query("SELECT * FROM clients", conn)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    conn.close()
+
+with tab2:
+    st.write("כאן יופיעו המשימות הדחופות שלך...")
