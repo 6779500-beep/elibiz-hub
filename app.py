@@ -958,13 +958,26 @@ elif selected_client_id is not None and get_client(selected_client_id):
 
             st.caption("הערות מהירות:")
             col_q1, col_q2, col_q3 = st.columns(3)
-            quick_notes = [(col_q1, "לא ענה"), (col_q2, "יחזור אלי"), (col_q3, "סוכם מחיר")]
+            quick_notes = [(col_q1, "לא ענה"), (col_q2, "יחזור אלי"), (col_q3, "ממתינה")]
             for col_q, label in quick_notes:
                 with col_q:
                     if st.button(label, key=f"quick_note_{label}_{client_id}"):
                         add_note(client_id, label)
                         touch_and_bump(client_id)
                         st.rerun()
+
+            col_cb_time, col_cb_btn = st.columns([2, 1])
+            with col_cb_time:
+                callback_time = st.time_input("ביקש חזרה בשעה", value=None, key=f"callback_time_{client_id}")
+            with col_cb_btn:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                if st.button("📌 שמור", key=f"callback_save_{client_id}"):
+                    if callback_time:
+                        add_note(client_id, f"ביקש חזרה בשעה {callback_time.strftime('%H:%M')}")
+                        touch_and_bump(client_id)
+                        st.rerun()
+                    else:
+                        st.error("יש לבחור שעה.")
 
             notes = get_notes(client_id)
             if not notes:
