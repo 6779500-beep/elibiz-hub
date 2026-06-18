@@ -287,4 +287,87 @@ if selected_client_id:
         
         with tab_tasks:
             st.markdown("### הוספת משימה חדשה")
-            col_t_desc, col_t_date = st.columns
+            col_t_desc, col_t_date = st.columns([3, 1])
+            with col_t_desc:
+                new_task_desc = st.text_input("תיאור המשימה (לדוגמה: לחזור עם הצעת מחיר):", key=f"t_desc_{selected_client_id}")
+            with col_t_date:
+                new_task_date = st.date_input("תאריך יעד:", key=f"t_date_{selected_client_id}")
+                
+            if st.button("➕ צור משימה"):
+                if new_task_desc.strip():
+                    save_new_task(selected_client_id, new_task_desc.strip(), new_task_date.strftime("%Y-%m-%d"))
+                    st.success("המשימה נוצרה!")
+                    st.rerun()
+                else:
+                    st.warning("נא להזין תיאור משימה.")
+            
+            st.markdown("---")
+            st.markdown("### משימות פתוחות")
+            open_tasks_df = tasks_df[tasks_df['status'] == 'פתוחה']
+            if not open_tasks_df.empty:
+                for _, task in open_tasks_df.iterrows():
+                    f_date = datetime.strptime(task['due_date'], "%Y-%m-%d").strftime("%d/%m/%Y")
+                    st.markdown(f"""
+                    <div class="task-box-open">
+                        <span class="date-span">⏱️ יעד: {f_date}</span><br>
+                        <strong style="font-size: 1.1em;">{task['task_desc']}</strong>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    if st.button("✅ סמן כבוצעה", key=f"btn_done_{task['id']}"):
+                        mark_task_done(task['id'])
+                        st.rerun()
+            else:
+                st.write("אין משימות פתוחות.")
+                
+            st.markdown("### משימות שהושלמו")
+            done_tasks_df = tasks_df[tasks_df['status'] == 'בוצעה']
+            if not done_tasks_df.empty:
+                for _, task in done_tasks_df.iterrows():
+                    st.markdown(f"""
+                    <div class="task-box-done">
+                        <span style="text-decoration: line-through;">{task['task_desc']}</span> (הושלם)
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.write("אין משימות שהושלמו.")
+
+        with tab_notes:
+            new_note_input = st.text_area("הקלד הערה לתיוק בקלסר:", height=100)
+            if st.button("💾 שמור הערה"):
+                if new_note_input.strip():
+                    conn = sqlite3.connect('crm.db'); c = conn.cursor()
+                    c.execute("INSERT INTO client_notes (client_id, note_date, note_text) VALUES (?, ?, ?)", (selected_client_id, datetime.now().strftime("%Y-%m-%d %H:%M"), new_note_input.strip()))
+                    conn.commit(); conn.close()
+                    st.success("נשמר!"); st.rerun()
+            st.markdown("---")
+            for _, row in notes_df.iterrows():
+                st.markdown(f"<div class='note-box'><span class='date-span'>📅 {row['note_date']}</span><p style='margin:5px 0 0 0; white-space:pre-wrap;'>{row['note_text']}</p></div>", unsafe_allow_html=True)
+
+        with tab_history:
+            if not messages_df.empty: st.dataframe(messages_df.rename(columns={'date':'תאריך', 'text':'הודעה'}), use_container_width=True, hide_index=True)
+            else: st.write("אין פניות.")
+
+        with tab_edit:
+            new_name = st.text_input("שם:", value=client_data[2])
+            opts = ["חדש", "בטיפול", "לטיפול עתידי", "טופל", "לא רלוונטי"]
+            new_status = st.selectbox("סטטוס:", opts, index=opts.index(client_data[3]) if client_data[3] in opts else 0)
+            if st.button("💾 עדכן פרטים"):
+                conn = sqlite3.connect('crm.db'); c = conn.cursor()
+                c.execute("UPDATE clients SET name=?, status=? WHERE id=?", (new_name, new_status, selected_client_id))
+                conn.commit(); conn.close(); st.success("עודכן!"); st.rerun()
+
+        with tab_files:
+            uploaded_file = st.file_uploader("העלה קובץ:", type=None)
+            if uploaded_file and st.button("📎 העלה קובץ"):
+                conn = sqlite3.connect('crm.db'); c = conn.cursor()
+                c.execute("INSERT INTO client_files (client_id, file_name, file_data, upload_date) VALUES (?, ?, ?, ?)", (selected_client_id, uploaded_file.name, sqlite3.Binary(uploaded_file.read()), datetime.now().strftime("%Y-%m-%d %H:%M")))
+                conn.commit(); conn.close(); st.success("הועלה!"); st.rerun()
+            for _, f in files_df.iterrows():
+                col1, col2 = st.columns([3,1])
+                with col1: st.write(f"📄 {f['file_name']}")
+                with col2:
+                    conn = sqlite3.connect('crm.db'); c = conn.cursor()
+                    c.execute("SELECT file_data FROM client_files WHERE id=?", (f['id'],))
+                    b_data = c.fetchone()[0]
+                    conn.close()
+                    st.download_button("⬇️ הורד", data=b_data, file_name=f['file_name'], key=f"dl_{f['id']}")
