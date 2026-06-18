@@ -6,7 +6,7 @@ import email
 import re
 from bs4 import BeautifulSoup
 
-# 1. הגדרות תצוגה ועיצוב מתקדם
+# --- 1. עיצוב ממשק פרימיום (RTL ועברית מלאה) ---
 st.set_page_config(page_title="CallBiz CRM", layout="wide")
 st.markdown("""
 <style>
@@ -19,11 +19,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 2. אתחול מסד נתונים חסין כפילויות
+# --- 2. תשתית מסד נתונים וחסינת כפילויות ---
 def init_db():
     conn = sqlite3.connect('crm.db')
     c = conn.cursor()
-    # שימוש ב-UNIQUE על עמודת הטלפון למניעת כפילויות
     c.execute('''CREATE TABLE IF NOT EXISTS clients 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                   name TEXT, 
@@ -35,10 +34,17 @@ def init_db():
                   client_id INTEGER, 
                   task_desc TEXT, 
                   status TEXT DEFAULT "פתוחה")''')
+    
+    # בדיקה ועדכון אוטומטי של עמודת ההערות
+    c.execute("PRAGMA table_info(clients)")
+    columns = [col[1] for col in c.fetchall()]
+    if 'notes' not in columns:
+        c.execute("ALTER TABLE clients ADD COLUMN notes TEXT")
+    
     conn.commit()
     conn.close()
 
-# 3. מנוע סנכרון חכם עם המייל
+# --- 3. מנוע סנכרון נתונים מהמייל ---
 def sync_data():
     try:
         conn = sqlite3.connect('crm.db')
@@ -58,21 +64,20 @@ def sync_data():
                 try:
                     conn.execute("INSERT INTO clients (name, phone) VALUES (?, ?)", ("לקוח חדש", phone.group(1)))
                 except sqlite3.IntegrityError:
-                    pass # הטלפון קיים, המערכת מדלגת ולא יוצרת כפילות
+                    pass # חסימת כפילויות
             
             mail.store(num, "+FLAGS", "\\Seen")
         
-        # מחיקת רשומות לא תקינות מהטבלה
         conn.execute("DELETE FROM clients WHERE phone='-' OR phone IS NULL OR phone='' OR phone='לא נמצא'")
         conn.commit()
         conn.close()
         return True
-    except Exception as e:
+    except:
         return False
 
 init_db()
 
-# 4. ממשק המשתמש
+# --- 4. מבנה הממשק ---
 st.markdown('<div class="card"><h1>💼 מערכת ניהול לקוחות CallBiz</h1></div>', unsafe_allow_html=True)
 
 col1, col2 = st.columns([1, 4])
@@ -86,53 +91,64 @@ with col1:
                 st.error("שגיאה בסנכרון.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# מערכת הלשוניות
-tab1, tab2, tab3 = st.tabs(["📋 טבלת לקוחות", "📂 ניהול תיק לקוח", "🚩 משימות"])
+# שינינו את מבנה הלשוניות לזרימת עבודה חלקה יותר
+tab1, tab2 = st.tabs(["📋 לקוחות ותיקי לקוח", "🚩 משימות"])
 
-# לשונית 1: טבלת הלקוחות הכללית
+# לשונית מרכזית: טבלה ותיק לקוח משולבים
 with tab1:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    conn = sqlite3.connect('crm.db')
-    df = pd.read_sql_query("SELECT id, name, phone, status FROM clients", conn)
-    conn.close()
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# לשונית 2: ניהול תיק לקוח ספציפי
-with tab2:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.subheader("איתור ועדכון תיק לקוח")
-    client_id = st.number_input("הכנס מספר ID של לקוח (מתוך הטבלה):", min_value=1, step=1)
+    st.subheader("רשימת לקוחות - הקלק על שורה כדי לפתוח את התיק")
     
-    if st.button("טען נתונים של לקוח זה"):
-        conn = sqlite3.connect('crm.db')
-        data = pd.read_sql_query(f"SELECT * FROM clients WHERE id={client_id}", conn)
+    conn = sqlite3.connect('crm.db')
+    df = pd.read_sql_query("SELECT id as [מזהה], name as [שם לקוח], phone as [טלפון], status as [סטטוס] FROM clients", conn)
+    conn.close()
+    
+    # הצגת הטבלה
+    selection = st.dataframe(
+        df, 
+        use_container_width=True, 
+        hide_index=True, 
+        selection_mode="single-row", 
+        on_select="rerun"
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # לכידת בחירת המשתמש והצגת תיק הלקוח מיד מתחת
+    selected_rows = []
+    if isinstance(selection, dict):
+        selected_rows = selection.get("selection", {}).get("rows", [])
+    elif hasattr(selection, "selection"):
+        sel_obj = selection.selection
+        selected_rows = sel_obj.get("rows", []) if isinstance(sel_obj, dict) else (sel_obj.rows if hasattr(sel_obj, "rows") else [])
+
+    if selected_rows:
+        selected_idx = selected_rows[0]
+        client_id = int(df.iloc[selected_idx]['מזהה'])
         
-        if not data.empty:
-            st.divider()
-            st.write(f"**שם הלקוח:** {data['name'].iloc[0]} | **מספר טלפון:** {data['phone'].iloc[0]}")
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader(f"📂 תיק לקוח אישי (מזהה: {client_id})")
+        
+        conn = sqlite3.connect('crm.db')
+        client_data = pd.read_sql_query(f"SELECT * FROM clients WHERE id={client_id}", conn)
+        
+        if not client_data.empty:
+            st.write(f"**שם הלקוח:** {client_data['name'].iloc[0]} | **מספר טלפון:** {client_data['phone'].iloc[0]}")
             
-            # שליפת ההערות הקיימות, אם ישנן
-            current_notes = data['notes'].iloc[0] if pd.notna(data['notes'].iloc[0]) else ""
+            current_notes = str(client_data['notes'].iloc[0]) if 'notes' in client_data.columns and pd.notna(client_data['notes'].iloc[0]) else ""
             
-            # שימוש בטופס ייעודי לשמירת הערות בצורה נקייה וללא קריסות
             with st.form(key=f"note_form_{client_id}"):
-                new_notes = st.text_area("הערות הלקוח (ניתן לערוך ולהוסיף מידע):", value=current_notes, height=150)
+                new_notes = st.text_area("הערות הלקוח (ערוך ולחץ על שמירה):", value=current_notes, height=150)
                 submit_button = st.form_submit_button("שמור הערות")
                 
                 if submit_button:
                     conn.execute("UPDATE clients SET notes=? WHERE id=?", (new_notes, client_id))
                     conn.commit()
-                    st.success("ההערות נשמרו בהצלחה במסד הנתונים!")
-        else:
-            st.warning("לא נמצא לקוח עם מספר ID זה. ודא שהמספר מופיע בטבלה.")
-        
+                    st.success("ההערות נשמרו בהצלחה!")
         conn.close()
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-# לשונית 3: משימות
-with tab3:
+with tab2:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("מערכת משימות")
-    st.write("התשתית למשימות הוגדרה במסד הנתונים בהצלחה. ניתן להרחיב חלק זה בהמשך.")
+    st.write("תשתית המשימות פתוחה, מוגדרת בעברית ומוכנה לעבודה בהמשך.")
     st.markdown('</div>', unsafe_allow_html=True)
