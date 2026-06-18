@@ -1,67 +1,137 @@
 import streamlit as st
+import sqlite3
+import pandas as pd
 import imaplib
 import email
 import re
 from bs4 import BeautifulSoup
-import sqlite3
-import pandas as pd
-from datetime import datetime
-from email.header import decode_header
 
-st.set_page_config(page_title="CallBiz CRM", page_icon="💼", layout="wide")
-
-# --- CSS מעוצב ---
+# --- 1. עיצוב ממשק ---
+st.set_page_config(page_title="CallBiz CRM", layout="wide")
 st.markdown("""
 <style>
-.stApp { direction: rtl; background-color: #f8f9fa; }
-.note-box { background-color: white; padding: 15px; border-radius: 10px; border-right: 5px solid #007aff; margin-bottom: 12px; }
-.status-badge { color: white; padding: 4px 12px; border-radius: 15px; font-size: 0.6em; font-weight: bold; }
+    .stApp { direction: rtl; text-align: right; background-color: #f4f7f6; font-family: 'Heebo', sans-serif; }
+    .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 20px; border: 1px solid #e1e8ed; }
+    h1 { color: #2c3e50; text-align: center; font-weight: 800; margin-bottom: 30px; }
+    .stButton>button { width: 100%; background-color: #3498db; color: white; border-radius: 8px; font-weight: bold; border: none; padding: 10px; transition: all 0.3s ease; }
+    .stButton>button:hover { background-color: #2980b9; }
+    [data-testid="stDataFrame"] { direction: rtl; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- ניהול מסד נתונים ---
+# --- 2. תשתית מסד נתונים חסין כפילויות ---
 def init_db():
     conn = sqlite3.connect('crm.db')
     c = conn.cursor()
+    # הגדרת UNIQUE על הטלפון מונעת כפילויות ברמת הליבה
     c.execute('''CREATE TABLE IF NOT EXISTS clients 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT UNIQUE, name TEXT, status TEXT DEFAULT 'חדש', followup_date TEXT, id_number TEXT)''')
-    # תמיכה בטבלאות נוספות
-    c.execute('''CREATE TABLE IF NOT EXISTS contact_phones 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER, phone_num TEXT, label TEXT, FOREIGN KEY(client_id) REFERENCES clients(id))''')
-    # (שאר הטבלאות נשארות כפי שהיו - הודעות, הערות, משימות, קבצים...)
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                  name TEXT, 
+                  phone TEXT UNIQUE, 
+                  status TEXT DEFAULT "חדש", 
+                  notes TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS tasks 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                  client_id INTEGER, 
+                  task_desc TEXT, 
+                  status TEXT DEFAULT "פתוחה")''')
     conn.commit()
     conn.close()
 
-# --- פונקציית חיפוש חכמה ---
-def search_clients(query):
+# --- 3. מנוע סנכרון נתונים ---
+def sync_data():
+    try:
+        conn = sqlite3.connect('crm.db')
+        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        mail.login(st.secrets["EMAIL_ACCOUNT"], st.secrets["APP_PASSWORD"])
+        mail.select("inbox")
+        _, msgs = mail.search(None, '(UNSEEN FROM "CallBiz@callbiz.co.il")')
+        
+        for num in msgs[0].split():
+            _, data = mail.fetch(num, "(RFC822)")
+            msg = email.message_from_bytes(data[0][1])
+            body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+            text = BeautifulSoup(body, "html.parser").get_text()
+            phone = re.search(r"(\d{9,10})", text)
+            
+            if phone:
+                try:
+                    conn.execute("INSERT INTO clients (name, phone) VALUES (?, ?)", ("לקוח חדש", phone.group(1)))
+                except sqlite3.IntegrityError:
+                    pass # מנגנון הגנה: מתעלם אם הטלפון כבר קיים
+            
+            mail.store(num, "+FLAGS", "\\Seen")
+        
+        # תהליך ניקוי נתונים שגויים
+        conn.execute("DELETE FROM clients WHERE phone='-' OR phone IS NULL OR phone='' OR phone='לא נמצא'")
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        return False
+
+init_db()
+
+# --- 4. בניית ממשק המשתמש ---
+st.markdown('<div class="card"><h1>💼 מערכת ניהול לקוחות CallBiz</h1></div>', unsafe_allow_html=True)
+
+col1, col2 = st.columns([1, 4])
+with col1:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    if st.button("🔄 סנכרן נתונים"):
+        with st.spinner("מסנכרן נתונים..."):
+            if sync_data():
+                st.success("הסנכרון בוצע בהצלחה!")
+            else:
+                st.error("שגיאה בסנכרון.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# יצירת לשוניות ניווט
+tab1, tab2, tab3 = st.tabs(["📋 טבלת לקוחות", "📂 ניהול תיק לקוח", "🚩 משימות"])
+
+# לשונית 1: טבלת לקוחות
+with tab1:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
     conn = sqlite3.connect('crm.db')
-    # חיפוש בשם, ת"ז, או כל טלפון מקושר
-    query_sql = f"%{query}%"
-    df = pd.read_sql_query("""
-        SELECT DISTINCT c.id, c.name, c.id_number 
-        FROM clients c 
-        LEFT JOIN contact_phones cp ON c.id = cp.client_id
-        WHERE c.name LIKE ? OR c.id_number LIKE ? OR c.phone LIKE ? OR cp.phone_num LIKE ?
-    """, conn, params=(query_sql, query_sql, query_sql, query_sql))
+    df = pd.read_sql_query("SELECT id, name, phone, status FROM clients", conn)
     conn.close()
-    return df
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# --- ממשק משתמש ---
-st.title("💼 מערכת CRM מתקדמת")
+# לשונית 2: תיק לקוח
+with tab2:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("איתור ועדכון תיק לקוח")
+    client_id = st.number_input("הכנס מספר ID של לקוח (מתוך הטבלה):", min_value=1, step=1)
+    
+    if st.button("טען נתונים של לקוח זה"):
+        conn = sqlite3.connect('crm.db')
+        data = pd.read_sql_query(f"SELECT * FROM clients WHERE id={client_id}", conn)
+        
+        if not data.empty:
+            st.divider()
+            st.write(f"**שם הלקוח:** {data['name'].iloc[0]} | **מספר טלפון:** {data['phone'].iloc[0]}")
+            
+            current_notes = data['notes'].iloc[0] if pd.notna(data['notes'].iloc[0]) else ""
+            
+            # טופס פנימי לשמירת הערות ללא שגיאות רענון
+            with st.form(key=f"note_form_{client_id}"):
+                new_notes = st.text_area("הערות הלקוח (ניתן לערוך ולהוסיף מידע):", value=current_notes, height=150)
+                submit_button = st.form_submit_button("שמור הערות")
+                
+                if submit_button:
+                    conn.execute("UPDATE clients SET notes=? WHERE id=?", (new_notes, client_id))
+                    conn.commit()
+                    st.success("ההערות נשמרו בהצלחה במסד הנתונים!")
+        else:
+            st.warning("לא נמצא לקוח עם מספר ID זה. ודא שהמספר מופיע בטבלה.")
+        
+        conn.close()
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# תיבת חיפוש גלובלית
-search_query = st.text_input("🔍 חיפוש לקוח (שם / ת"ז / טלפון):")
-if search_query:
-    results = search_clients(search_query)
-    if not results.empty:
-        st.write("תוצאות חיפוש:")
-        st.dataframe(results)
-    else:
-        st.write("לא נמצאו תוצאות.")
-
-# --- אזור ניהול תיק לקוח ---
-# (כאן תוסיף את שאר הלוגיקה שלך לטאבים)
-# בתוך טאב "📝 פרטים":
-# st.text_input("מספר תעודת זהות:", key="id_input")
-# st.text_input("הוסף טלפון נוסף:", key="extra_phone")
-# st.selectbox("סוג:", ["נייד", "בית", "משרד", "אחר"])
+# לשונית 3: משימות
+with tab3:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("מערכת משימות")
+    st.write("התשתית למשימות הוגדרה במסד הנתונים בהצלחה וממתינה להפעלה.")
+    st.markdown('</div>', unsafe_allow_html=True)
