@@ -264,7 +264,6 @@ if selected_client_id:
         conn = sqlite3.connect('crm.db')
         c = conn.cursor()
         
-        # תיקון מס' 1: הפרדת הפקודה מהשליפה
         c.execute("SELECT * FROM clients WHERE id = ?", (selected_client_id,))
         client_data = c.fetchone()
         
@@ -284,4 +283,8 @@ if selected_client_id:
         </div>
         """, unsafe_allow_html=True)
         
-        tab_tasks, tab_notes, tab_history, tab_edit, tab_files = st.tabs(["✅
+        tab_tasks, tab_notes, tab_history, tab_edit, tab_files = st.tabs(["✅ משימות", "✍️ הערות", "📥 פניות", "📝 פרטים", "📁 מסמכים"])
+        
+        with tab_tasks:
+            st.markdown("### הוספת משימה חדשה")
+            col_t_desc, col_t_date = st.columns
