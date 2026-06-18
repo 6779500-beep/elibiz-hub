@@ -19,6 +19,18 @@ h1, h2, h3, p, div, span, label { text-align: right; }
 .stButton>button { float: right; width: 100%; margin-top: 10px; }
 .stAlert { direction: rtl; text-align: right; }
 div[data-testid="stExpander"] { text-align: right; direction: rtl; }
+.note-box {
+    background-color: #f0f2f6;
+    padding: 12px;
+    border-radius: 8px;
+    border-right: 4px solid #007aff;
+    margin-bottom: 10px;
+}
+.date-span {
+    color: #666666;
+    font-size: 0.85em;
+    font-weight: bold;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -28,20 +40,22 @@ st.title("💼 מערכת CallBiz CRM האישית שלך")
 def init_db():
     conn = sqlite3.connect('crm.db')
     c = conn.cursor()
-    # 1. טבלת לקוחות ייחודיים
+    
+    # 1. טבלת לקוחות
     c.execute('''CREATE TABLE IF NOT EXISTS clients
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   phone TEXT UNIQUE,
                   name TEXT,
-                  status TEXT DEFAULT 'חדש',
-                  notes TEXT DEFAULT '')''')
-    # 2. טבלת הודעות מקושרות
+                  status TEXT DEFAULT 'חדש')''')
+                  
+    # 2. טבלת הודעות מ-CallBiz
     c.execute('''CREATE TABLE IF NOT EXISTS messages
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   client_id INTEGER,
                   date TEXT,
                   text TEXT,
                   FOREIGN KEY(client_id) REFERENCES clients(id))''')
+                  
     # 3. טבלת קבצים משויכים
     c.execute('''CREATE TABLE IF NOT EXISTS client_files
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,6 +64,15 @@ def init_db():
                   file_data BLOB,
                   upload_date TEXT,
                   FOREIGN KEY(client_id) REFERENCES clients(id))''')
+                  
+    # 4. טבלת הערות נפרדות עם תאריך (הטבלה החדשה)
+    c.execute('''CREATE TABLE IF NOT EXISTS client_notes
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  client_id INTEGER,
+                  note_date TEXT,
+                  note_text TEXT,
+                  FOREIGN KEY(client_id) REFERENCES clients(id))''')
+                  
     conn.commit()
     conn.close()
 
@@ -57,27 +80,32 @@ def save_incoming_lead(name, phone, message_text):
     conn = sqlite3.connect('crm.db')
     c = conn.cursor()
     
-    # בדיקה אם הלקוח כבר קיים לפי מספר טלפון
-    c.execute("SELECT id, name FROM clients WHERE phone = ?", (phone,))
+    c.execute("SELECT id FROM clients WHERE phone = ?", (phone,))
     client = c.fetchone()
     
     if client:
         client_id = client[0]
-        # אם הלקוח קיים אך הסטטוס שלו היה 'טופל', נחזיר אותו ל'חדש' כי הגיעה הודעה חדשה
         c.execute("UPDATE clients SET status = 'חדש' WHERE id = ? AND status = 'טופל'", (client_id,))
     else:
-        # לקוח חדש לחלוטין - יצירת תיק לקוח
         c.execute("INSERT INTO clients (phone, name, status) VALUES (?, ?, 'חדש')", (phone, name))
         client_id = c.lastrowid
         
-    # שמירת ההודעה הנוכחית בהיסטוריה של הלקוח
     current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
     c.execute("INSERT INTO messages (client_id, date, text) VALUES (?, ?, ?)", (client_id, current_date, message_text))
     
     conn.commit()
     conn.close()
 
-# --- משיכת מיילים אוטומטית ---
+def save_new_note(client_id, note_text):
+    conn = sqlite3.connect('crm.db')
+    c = conn.cursor()
+    current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+    c.execute("INSERT INTO client_notes (client_id, note_date, note_text) VALUES (?, ?, ?)", 
+              (client_id, current_date, note_text))
+    conn.commit()
+    conn.close()
+
+# --- משיכת מיילים ---
 def fetch_emails():
     try:
         EMAIL_ACCOUNT = st.secrets["EMAIL_ACCOUNT"]
@@ -134,7 +162,7 @@ def fetch_emails():
 # --- אתחול מערכת ---
 init_db()
 
-# --- חלוקת המסך לשני עמודות (ניהול מול צפייה) ---
+# --- חלוקת המסך ---
 col_actions, col_main = st.columns([1, 3])
 
 with col_actions:
@@ -148,7 +176,7 @@ with col_actions:
             else:
                 st.info("אין הודעות חדשות בתיבה.")
 
-# טעינת נתונים עדכנית
+# טעינת נתונים
 conn = sqlite3.connect('crm.db')
 clients_df = pd.read_sql_query("SELECT * FROM clients ORDER BY id DESC", conn)
 conn.close()
@@ -159,7 +187,6 @@ with col_main:
     if clients_df.empty:
         st.info("המערכת ריקה כעת. לחץ על כפתור הסנכרון כדי למשוך פניות ראשונות.")
     else:
-        # יצירת רשימת בחירה של לקוחות עבור "תיק לקוח"
         client_options = {f"{row['name']} ({row['phone']}) - [{row['status']}]": row['id'] for _, row in clients_df.iterrows()}
         selected_client_label = st.selectbox("🎯 בחר תיק לקוח לפתיחה ועריכה:", list(client_options.keys()))
         selected_client_id = client_options[selected_client_label]
@@ -170,14 +197,12 @@ with col_main:
         c.execute("SELECT * FROM clients WHERE id = ?", (selected_client_id,))
         client_data = c.fetchone()
         
-        # שליפת הודעות הלקוח
+        # שליפת הודעות, הערות וקבצים
         messages_df = pd.read_sql_query(f"SELECT date as 'תאריך', text as 'תוכן ההודעה' FROM messages WHERE client_id = {selected_client_id} ORDER BY id DESC", conn)
-        
-        # שליפת קבצי הלקוח
-        files_df = pd.read_sql_query(f"SELECT id, file_name, upload_date FROM client_files WHERE client_id = {selected_client_id}", conn)
+        notes_df = pd.read_sql_query(f"SELECT note_date, note_text FROM client_notes WHERE client_id = {selected_client_id} ORDER BY id DESC", conn)
+        files_df = pd.read_sql_query(f"SELECT id, file_name, upload_date FROM client_files WHERE client_id = {selected_client_id} ORDER BY id DESC", conn)
         conn.close()
         
-        # הצגת כרטיס הלקוח הנבחר
         st.markdown(f"### 🗂️ תיק לקוח: {client_data[2]}")
         
         # כפתורי פעולה מהירים לנייד
@@ -192,55 +217,75 @@ with col_main:
             
         st.write("")
         
-        # חלוקה לטאבים בתוך תיק הלקוח
-        tab_history, tab_edit, tab_files = st.tabs(["📥 היסטוריית פניות", "📝 עריכת פרטים והערות", "📁 מסמכים וקבצים"])
+        # חלוקה לטאבים משופרת
+        tab_history, tab_notes, tab_edit, tab_files = st.tabs(["📥 היסטוריית פניות מערכת", "✍️ הערות ותיעוד ידני", "📝 עריכת סטטוס ושם", "📁 מסמכים וקבצים"])
         
         with tab_history:
-            st.markdown("**כל ההודעות שהתקבלו מלקוח זה:**")
+            st.markdown("**הודעות אוטומטיות שהתקבלו מ-CallBiz עבור לקוח זה:**")
             if not messages_df.empty:
                 st.dataframe(messages_df, use_container_width=True, hide_index=True)
             else:
-                st.write("אין הודעות מתועדות.")
+                st.write("אין הודעות מערכת מתועדות.")
+                
+        with tab_notes:
+            st.markdown("**✍️ הוספת הערה חדשה לתיק:**")
+            new_note_input = st.text_area("הקלד הערה חדשה (תשמר כרשומה נפרדת עם חותמת זמן):", value="", height=100, key=f"note_input_{selected_client_id}")
+            
+            if st.button("💾 שמור הערה בתיק הלקוח"):
+                if new_note_input.strip() != "":
+                    save_new_note(selected_client_id, new_note_input.strip())
+                    st.success("ההערה נשמרה בהצלחה בציר הזמן!")
+                    st.rerun()
+                else:
+                    st.warning("לא ניתן לשמור הערה ריקה.")
+            
+            st.markdown("---")
+            st.markdown("**📜 ציר זמן - הערות מתועדות:**")
+            if not notes_df.empty:
+                for _, note_row in notes_df.iterrows():
+                    st.markdown(f"""
+                    <div class="note-box">
+                        <span class="date-span">📅 {note_row['note_date']}</span><br>
+                        <p style="margin-top:5px; margin-bottom:0; white-space: pre-wrap;">{note_row['note_text']}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.write("עדיין אין הערות ידניות בתיק זה.")
                 
         with tab_edit:
-            st.markdown("**עדכון פרטי הלקוח במערכת:**")
+            st.markdown("**עדכון פרטי זיהוי וסטטוס:**")
+            new_name = st.text_input("תיקון שם הלקוח (אם נכתב משובש במקור):", value=client_data[2])
+            new_status = st.selectbox("סטטוס טיפול נוכחי:", ["חדש", "בטיפול", "טופל", "לא רלוונטי"], index=["חדש", "בטיפול", "טופל", "לא רלוונטי"].index(client_data[3]))
             
-            # טופס עריכה
-            new_name = st.text_input("שם הלקוח (לתיקון אם נכתב שגוי):", value=client_data[2])
-            new_status = st.selectbox("סטטוס טיפול:", ["חדש", "בטיפול", "טופל", "לא רלוונטי"], index=["חדש", "בטיפול", "טופל", "לא רלוונטי"].index(client_data[3]))
-            new_notes = st.text_area("הערות קבועות, סיכום שיחות ומידע נוסף:", value=client_data[4], height=150)
-            
-            if st.button("💾 שמור עדכונים בתיק הלקוח"):
+            if st.button("💾 שמור שינויי שם וסטטוס"):
                 conn = sqlite3.connect('crm.db')
                 c = conn.cursor()
-                c.execute("UPDATE clients SET name = ?, status = ?, notes = ? WHERE id = ?", (new_name, new_status, new_notes, selected_client_id))
+                c.execute("UPDATE clients SET name = ?, status = ? WHERE id = ?", (new_name, new_status, selected_client_id))
                 conn.commit()
                 conn.close()
-                st.success("הפרטים עודכנו בהצלחה!")
+                st.success("הפרטים הכלליים עודכנו!")
                 st.rerun()
                 
         with tab_files:
             st.markdown("**ניהול מסמכים וקבצים משויכים ללקוח:**")
-            
-            # העלאת קובץ חדש ללקוח
-            uploaded_file = st.file_uploader("העלה מסמך חדש לתיק הלקוח (PDF, תמונה, אקסל וכו'):", type=None)
+            uploaded_file = st.file_uploader("בחר קובץ להעלאה (PDF, תמונה, אקסל וכו'):", type=None)
             if uploaded_file is not None:
                 file_bytes = uploaded_file.read()
                 file_name = uploaded_file.name
                 current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
                 
-                if st.button(f"📎 שייך את הקובץ '{file_name}' ללקוח"):
+                if st.button(f"📎 העלה ושייך את הקובץ '{file_name}'"):
                     conn = sqlite3.connect('crm.db')
                     c = conn.cursor()
                     c.execute("INSERT INTO client_files (client_id, file_name, file_data, upload_date) VALUES (?, ?, ?, ?)",
                               (selected_client_id, file_name, sqlite3.Binary(file_bytes), current_time))
                     conn.commit()
                     conn.close()
-                    st.success("הקובץ שויך ונשמר בהצלחה!")
+                    st.success("הקובץ נשמר בהצלחה בתיק הלקוח!")
                     st.rerun()
             
             st.write("")
-            st.markdown("**קבצים קיימים בתיק:**")
+            st.markdown("**📋 רשימת מסמכים בתיק:**")
             if not files_df.empty:
                 for _, file_row in files_df.iterrows():
                     file_id = file_row['id']
@@ -249,9 +294,8 @@ with col_main:
                     
                     col_f_name, col_f_btn = st.columns([3, 1])
                     with col_f_name:
-                        st.write(f"📄 {f_name} *(הועלה ב-{u_date})*")
+                        st.markdown(f"📄 **{f_name}** <br> <span style='color:#666; font-size:0.85em;'>⏱️ הועלה ב: {u_date}</span>", unsafe_allow_html=True)
                     with col_f_btn:
-                        # שליפת מידע של קובץ ספציפי לצורך הורדה
                         conn = sqlite3.connect('crm.db')
                         c = conn.cursor()
                         c.execute("SELECT file_data FROM client_files WHERE id = ?", (file_id,))
