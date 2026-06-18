@@ -1221,26 +1221,18 @@ else:
     if df.empty:
         st.info("לא נמצאו לקוחות.")
     else:
-        header_cols = st.columns([0.5, 1.8, 1.3, 1.2, 1.2, 1.2])
-        header_labels = ["מזהה", "שם לקוח", "טלפון", "סטטוס", "תיעדוף", "סיווג"]
-        for hc, label in zip(header_cols, header_labels):
-            hc.markdown(f'<span style="color:#a39c87;font-size:11px;font-weight:700">{label}</span>', unsafe_allow_html=True)
-
         for _, row in df.iterrows():
             cid = int(row['id'])
             st.markdown('<div class="client-row-inline">', unsafe_allow_html=True)
-            cols = st.columns([0.5, 1.8, 1.3, 1.2, 1.2, 1.2])
-            with cols[0]:
-                st.markdown(f"<span class='cell-id'>{cid}</span>", unsafe_allow_html=True)
-            with cols[1]:
-                st.markdown(f"<a class='row-name-link' href='?client_id={cid}' target='_self'>{row['name']}</a>",
+            col_name, col_status, col_priority, col_category = st.columns([2.2, 1.2, 1.2, 1.2])
+            with col_name:
+                st.markdown(f"<span class='cell-id'>מזהה {cid}</span>", unsafe_allow_html=True)
+                st.markdown(f"<a class='row-name-link' href='?client_id={cid}' target='_self'>👤 {row['name']}</a>",
                              unsafe_allow_html=True)
-            with cols[2]:
-                st.markdown(f"<span class='cell-phone-text'>{row['phone']}</span>", unsafe_allow_html=True)
-            with cols[3]:
+                st.markdown(f"<span class='cell-phone-text'>📞 {row['phone']}</span>", unsafe_allow_html=True)
+            with col_status:
                 s_idx = STATUS_OPTIONS.index(row['status']) if row['status'] in STATUS_OPTIONS else 0
-                sel_status = st.selectbox("סטטוס", STATUS_OPTIONS, index=s_idx,
-                                           key=f"list_status_{cid}", label_visibility="collapsed")
+                sel_status = st.selectbox("סטטוס", STATUS_OPTIONS, index=s_idx, key=f"list_status_{cid}")
                 if sel_status != row['status']:
                     conn = sqlite3.connect('crm.db')
                     conn.execute(
@@ -1250,10 +1242,9 @@ else:
                     conn.close()
                     log_status_change(cid, row['status'], sel_status)
                     st.rerun()
-            with cols[4]:
+            with col_priority:
                 p_idx = PRIORITY_OPTIONS.index(row['priority']) if row['priority'] in PRIORITY_OPTIONS else 0
-                sel_priority = st.selectbox("תיעדוף", PRIORITY_OPTIONS, index=p_idx,
-                                             key=f"list_priority_{cid}", label_visibility="collapsed")
+                sel_priority = st.selectbox("תיעדוף", PRIORITY_OPTIONS, index=p_idx, key=f"list_priority_{cid}")
                 if sel_priority != row['priority']:
                     conn = sqlite3.connect('crm.db')
                     conn.execute(
@@ -1262,10 +1253,9 @@ else:
                     conn.commit()
                     conn.close()
                     st.rerun()
-            with cols[5]:
+            with col_category:
                 c_idx = CATEGORY_OPTIONS.index(row['category']) if row['category'] in CATEGORY_OPTIONS else 0
-                sel_category = st.selectbox("סיווג", CATEGORY_OPTIONS, index=c_idx,
-                                             key=f"list_category_{cid}", label_visibility="collapsed")
+                sel_category = st.selectbox("סיווג", CATEGORY_OPTIONS, index=c_idx, key=f"list_category_{cid}")
                 if sel_category != row['category']:
                     conn = sqlite3.connect('crm.db')
                     conn.execute(
