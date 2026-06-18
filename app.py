@@ -12,9 +12,9 @@ from bs4 import BeautifulSoup
 # --- עיצוב ממשק פרימיום (RTL ועברית מלאה) ---
 st.set_page_config(page_title="CallBiz CRM", layout="wide")
 
-st.markdown("""
-<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+st.html("""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap');
 * { font-family: 'Heebo', sans-serif !important; }
 .stApp { direction: rtl; text-align: right; background-color: #f0f4f8; }
 [data-testid="stAppViewContainer"] { background-color: #f0f4f8; }
@@ -104,8 +104,16 @@ st.markdown("""
 
 [data-testid="stDataFrame"] { direction: rtl; }
 .stTabs [data-baseweb="tab"] { font-weight: 600; font-size: 14px; }
+
+/* לוח משימות דחופות גלובלי */
+.urgent-box {
+    background: #fff7ed; border-right: 4px solid #f59e0b;
+    padding: 10px 14px; border-radius: 0 8px 8px 0; margin-bottom: 8px;
+}
+.urgent-box .urgent-desc { color: #1e293b; font-weight: 600; font-size: 14px; }
+.urgent-box .urgent-meta { color: #92400e; font-size: 12px; margin-top: 2px; }
 </style>
-""", unsafe_allow_html=True)
+""")
 
 # --- תשתית מסד נתונים ---
 UPLOAD_DIR = "uploads"
@@ -192,7 +200,8 @@ def sync_data():
                     pass
             mail.store(num, "+FLAGS", "\\Seen")
 
-        conn.execute("DELETE FROM clients WHERE phone IS NULL OR phone='' OR phone='-' OR phone='לא נמצא'")
+        conn.execute(
+            "DELETE FROM clients WHERE phone IS NULL OR phone='' OR phone LIKE '%-%' OR phone='לא נמצא'")
         conn.commit()
         conn.close()
         return True, count
@@ -216,6 +225,18 @@ def get_alerts():
     ).fetchone()[0]
     conn.close()
     return new_count, urgent_tasks
+
+def get_urgent_tasks():
+    conn = sqlite3.connect('crm.db')
+    today = date.today().isoformat()
+    rows = conn.execute("""
+        SELECT t.id, t.description, t.due_date, c.name, c.id
+        FROM tasks t JOIN clients c ON t.client_id = c.id
+        WHERE t.is_done=0 AND t.due_date!='' AND t.due_date<=?
+        ORDER BY t.due_date ASC
+    """, (today,)).fetchall()
+    conn.close()
+    return rows
 
 def get_client(client_id):
     conn = sqlite3.connect('crm.db')
@@ -272,6 +293,22 @@ else:
     alerts_html += '&nbsp;<span style="font-size:13px;opacity:0.7"> | אין משימות דחופות</span>'
 alerts_html += '</div>'
 st.markdown(alerts_html, unsafe_allow_html=True)
+
+# --- לוח משימות דחופות גלובלי ---
+urgent_list = get_urgent_tasks()
+if urgent_list:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("⏰ משימות דחופות מכל הלקוחות")
+    today_str = date.today().isoformat()
+    for t_id, t_desc, t_due, c_name, c_id in urgent_list:
+        label = "באיחור" if t_due < today_str else "להיום"
+        st.markdown(f'''
+        <div class="urgent-box">
+            <div class="urgent-desc">{t_desc}</div>
+            <div class="urgent-meta">👤 {c_name} &nbsp;|&nbsp; 🗓 {t_due} ({label})</div>
+        </div>
+        ''', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # --- כפתור סנכרון ---
 col_sync, col_empty = st.columns([1, 5])
