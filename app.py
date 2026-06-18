@@ -6,12 +6,11 @@ from bs4 import BeautifulSoup
 import sqlite3
 import pandas as pd
 from datetime import datetime
-import io
 
 # --- הגדרות דף ---
 st.set_page_config(page_title="CallBiz CRM", page_icon="💼", layout="wide")
 
-# --- הזרקת קוד עיצוב (CSS) ליישור לימין (RTL) ---
+# --- הזרקת קוד עיצוב (CSS) ליישור לימין וצבעי סטטוסים ---
 st.markdown("""
 <style>
 .stApp { direction: rtl; }
@@ -31,23 +30,50 @@ div[data-testid="stExpander"] { text-align: right; direction: rtl; }
     font-size: 0.85em;
     font-weight: bold;
 }
+.status-badge {
+    color: white;
+    padding: 4px 12px;
+    border-radius: 15px;
+    font-size: 0.6em;
+    font-weight: bold;
+    vertical-align: middle;
+    display: inline-block;
+    margin-right: 10px;
+}
 </style>
 """, unsafe_allow_html=True)
 
 st.title("💼 מערכת CallBiz CRM האישית שלך")
 
-# --- ניהול מסד נתונים משודרג ---
+# מילון צבעים קבוע לסטטוסים
+STATUS_COLORS = {
+    "חדש": "#007aff",         # כחול
+    "בטיפול": "#ff9500",      # כתום
+    "לטיפול עתידי": "#5856d6",  # סגול
+    "טופל": "#34c759",        # ירוק
+    "לא רלוונטי": "#8e8e93"   # אפור
+}
+
+# --- ניהול מסד נתונים ---
 def init_db():
     conn = sqlite3.connect('crm.db')
     c = conn.cursor()
     
-    # 1. טבלת לקוחות
+    # 1. טבלת לקוחות עם תמיכה בתאריך יעד
     c.execute('''CREATE TABLE IF NOT EXISTS clients
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   phone TEXT UNIQUE,
                   name TEXT,
-                  status TEXT DEFAULT 'חדש')''')
+                  status TEXT DEFAULT 'חדש',
+                  followup_date TEXT DEFAULT '')''')
                   
+    # הגנה למסד נתונים קיים - הוספת העמודה החדשה אם היא לא קיימת
+    try:
+        c.execute("ALTER TABLE clients ADD COLUMN followup_date TEXT DEFAULT ''")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass # העמודה כבר קיימת, אין צורך בשינוי
+        
     # 2. טבלת הודעות מ-CallBiz
     c.execute('''CREATE TABLE IF NOT EXISTS messages
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +82,7 @@ def init_db():
                   text TEXT,
                   FOREIGN KEY(client_id) REFERENCES clients(id))''')
                   
-    # 3. טבלת קבצים משויכים
+    # 3. טבלת קבצים
     c.execute('''CREATE TABLE IF NOT EXISTS client_files
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   client_id INTEGER,
@@ -65,7 +91,7 @@ def init_db():
                   upload_date TEXT,
                   FOREIGN KEY(client_id) REFERENCES clients(id))''')
                   
-    # 4. טבלת הערות נפרדות עם תאריך (הטבלה החדשה)
+    # 4. טבלת הערות
     c.execute('''CREATE TABLE IF NOT EXISTS client_notes
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   client_id INTEGER,
@@ -87,7 +113,7 @@ def save_incoming_lead(name, phone, message_text):
         client_id = client[0]
         c.execute("UPDATE clients SET status = 'חדש' WHERE id = ? AND status = 'טופל'", (client_id,))
     else:
-        c.execute("INSERT INTO clients (phone, name, status) VALUES (?, ?, 'חדש')", (phone, name))
+        c.execute("INSERT INTO clients (phone, name, status, followup_date) VALUES (?, ?, 'חדש', '')", (phone, name))
         client_id = c.lastrowid
         
     current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -176,12 +202,30 @@ with col_actions:
             else:
                 st.info("אין הודעות חדשות בתיבה.")
 
-# טעינת נתונים
+# טעינת נתונים כללית
 conn = sqlite3.connect('crm.db')
 clients_df = pd.read_sql_query("SELECT * FROM clients ORDER BY id DESC", conn)
 conn.close()
 
 with col_main:
+    # --- מנגנון תזכורות אקטיבי בראש עמוד הלקוחות ---
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    conn = sqlite3.connect('crm.db')
+    reminders_df = pd.read_sql_query(f"""
+        SELECT name, phone, followup_date 
+        FROM clients 
+        WHERE status = 'לטיפול עתידי' AND followup_date <= '{today_str}' AND followup_date != ''
+    """, conn)
+    conn.close()
+    
+    if not reminders_df.empty:
+        st.markdown("### 🔔 תזכורות חמות לטיפול היום!")
+        for _, r_row in reminders_df.iterrows():
+            # המרת פורמט תאריך לתצוגה ישראלית נוחה
+            formatted_date = datetime.strptime(r_row['followup_date'], "%Y-%m-%d").strftime("%d/%m/%Y")
+            st.error(f"🚨 **הגיע מועד המעקב:** חזרה אל **{r_row['name']}** ({r_row['phone']}) | תאריך יעד: {formatted_date}")
+        st.markdown("---")
+
     st.subheader("📂 תיקי לקוחות")
     
     if clients_df.empty:
@@ -203,7 +247,20 @@ with col_main:
         files_df = pd.read_sql_query(f"SELECT id, file_name, upload_date FROM client_files WHERE client_id = {selected_client_id} ORDER BY id DESC", conn)
         conn.close()
         
-        st.markdown(f"### 🗂️ תיק לקוח: {client_data[2]}")
+        # הצגת כרטיס הלקוח עם תג סטטוס צבעוני
+        current_status = client_data[3]
+        status_color = STATUS_COLORS.get(current_status, "#8e8e93")
+        
+        st.markdown(f"""
+        ### 🗂️ תיק לקוח: {client_data[2]} 
+        <span class="status-badge" style="background-color: {status_color};">{current_status}</span>
+        """, unsafe_allow_html=True)
+        
+        if current_status == "לטיפול עתידי" and client_data[4]:
+            f_date = datetime.strptime(client_data[4], "%Y-%m-%d").strftime("%d/%m/%Y")
+            st.markdown(f"⏱️ **תאריך יעד למעקב:** {f_date}")
+        
+        st.write("")
         
         # כפתורי פעולה מהירים לנייד
         clean_phone = ''.join(filter(str.isdigit, client_data[1]))
@@ -217,7 +274,6 @@ with col_main:
             
         st.write("")
         
-        # חלוקה לטאבים משופרת
         tab_history, tab_notes, tab_edit, tab_files = st.tabs(["📥 היסטוריית פניות מערכת", "✍️ הערות ותיעוד ידני", "📝 עריכת סטטוס ושם", "📁 מסמכים וקבצים"])
         
         with tab_history:
@@ -229,7 +285,7 @@ with col_main:
                 
         with tab_notes:
             st.markdown("**✍️ הוספת הערה חדשה לתיק:**")
-            new_note_input = st.text_area("הקלד הערה חדשה (תשמר כרשומה נפרדת עם חותמת זמן):", value="", height=100, key=f"note_input_{selected_client_id}")
+            new_note_input = st.text_area("הקלד הערה חדשה:", value="", height=100, key=f"note_input_{selected_client_id}")
             
             if st.button("💾 שמור הערה בתיק הלקוח"):
                 if new_note_input.strip() != "":
@@ -255,15 +311,38 @@ with col_main:
         with tab_edit:
             st.markdown("**עדכון פרטי זיהוי וסטטוס:**")
             new_name = st.text_input("תיקון שם הלקוח (אם נכתב משובש במקור):", value=client_data[2])
-            new_status = st.selectbox("סטטוס טיפול נוכחי:", ["חדש", "בטיפול", "טופל", "לא רלוונטי"], index=["חדש", "בטיפול", "טופל", "לא רלוונטי"].index(client_data[3]))
             
-            if st.button("💾 שמור שינויי שם וסטטוס"):
+            status_options = ["חדש", "בטיפול", "לטיפול עתידי", "טופל", "לא רלוונטי"]
+            try:
+                current_idx = status_options.index(client_data[3])
+            except ValueError:
+                current_idx = 0
+                
+            new_status = st.selectbox("סטטוס טיפול נוכחי:", status_options, index=current_idx)
+            
+            # הצגת בחירת תאריך רק אם נבחר סטטוס לטיפול עתידי
+            new_followup_date = client_data[4] if len(client_data) > 4 else ""
+            if new_status == "לטיפול עתידי":
+                # טעינת התאריך הקיים או ברירת מחדל של היום
+                try:
+                    default_date = datetime.strptime(client_data[4], "%Y-%m-%d").date() if client_data[4] else datetime.now().date()
+                except ValueError:
+                    default_date = datetime.now().date()
+                    
+                picked_date = st.date_input("📅 בחר תאריך יעד לתזכורת המעקב:", value=default_date)
+                new_followup_date = picked_date.strftime("%Y-%m-%d")
+            else:
+                # אם הסטטוס שונה, ננקה את תאריך היעד
+                new_followup_date = ""
+            
+            if st.button("💾 שמור שינויי שם, סטטוס ותאריך"):
                 conn = sqlite3.connect('crm.db')
                 c = conn.cursor()
-                c.execute("UPDATE clients SET name = ?, status = ? WHERE id = ?", (new_name, new_status, selected_client_id))
+                c.execute("UPDATE clients SET name = ?, status = ?, followup_date = ? WHERE id = ?", 
+                          (new_name, new_status, new_followup_date, selected_client_id))
                 conn.commit()
                 conn.close()
-                st.success("הפרטים הכלליים עודכנו!")
+                st.success("הפרטים והסטטוס עודכנו בהצלחה!")
                 st.rerun()
                 
         with tab_files:
