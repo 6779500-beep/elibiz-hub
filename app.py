@@ -14,11 +14,16 @@ st.set_page_config(page_title="CallBiz CRM", layout="wide")
 
 st.html("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&family=Frank+Ruhl+Libre:wght@500;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&family=Frank+Ruhl+Libre:wght@500;700;900&family=Secular+One&display=swap');
 * { font-family: 'Heebo', sans-serif !important; }
 [data-testid="stHeading"] h1, [data-testid="stHeading"] h2, [data-testid="stHeading"] h3,
 .brand-name, .main-title, .client-header h3 {
     font-family: 'Frank Ruhl Libre', serif !important;
+}
+/* גופן ייחודי לתוכן הערות ומשימות */
+.note-item .note-text, .task-text {
+    font-family: 'Secular One', sans-serif !important; font-weight: 400 !important;
+    letter-spacing: 0.2px;
 }
 html { font-size: 19px !important; }
 body, [data-testid="stAppViewContainer"], [data-testid="stMain"] { font-size: 1rem !important; }
@@ -1095,7 +1100,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
                         style = "text-decoration:line-through;color:#94a3b8" if t_done else ""
                         color = "color:#e74c3c;font-weight:600" if is_overdue else ""
                         st.markdown(
-                            f"<span style='{style}{color}'>{t_desc}</span>",
+                            f"<span class='task-text' style='{style}{color}'>{t_desc}</span>",
                             unsafe_allow_html=True)
                     with col_due:
                         if t_due:
