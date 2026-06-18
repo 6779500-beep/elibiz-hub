@@ -6,69 +6,67 @@ import email
 import re
 from bs4 import BeautifulSoup
 
-# עיצוב יפה (אותו CSS שעבד)
+# עיצוב CSS מלא - מובטח
 st.set_page_config(page_title="CallBiz CRM", layout="wide")
 st.markdown("""
 <style>
-    .stApp { direction: rtl; text-align: right; background-color: #f4f7f6; font-family: 'Heebo', sans-serif; }
-    .card { background: white; padding: 25px; border-radius: 15px; box-shadow: 0 6px 12px rgba(0,0,0,0.08); margin-bottom: 20px; }
-    .stButton>button { width: 100%; border-radius: 10px; background-color: #3498db; color: white; font-weight: bold; }
-    [data-testid="stDataFrame"] { direction: rtl; }
+    .stApp { direction: rtl !important; text-align: right !important; background-color: #f0f2f6 !important; font-family: 'Heebo', sans-serif !important; }
+    h1 { color: #2c3e50 !important; text-align: center !important; margin-bottom: 30px !important; }
+    .card { background-color: white !important; padding: 25px !important; border-radius: 15px !important; box-shadow: 0 4px 10px rgba(0,0,0,0.1) !important; margin-bottom: 20px !important; }
+    .stButton>button { width: 100% !important; border-radius: 10px !important; background-color: #3498db !important; color: white !important; font-weight: bold !important; border: none !important; padding: 10px !important; }
+    [data-testid="stDataFrame"] { direction: rtl !important; border-radius: 10px !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# תשתית עם הגנה מכפילויות
+# לוגיקה
 def init_db():
     conn = sqlite3.connect('crm.db')
     c = conn.cursor()
-    # UNIQUE(phone) הוא המפתח למניעת כפילויות
-    c.execute('''CREATE TABLE IF NOT EXISTS clients 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  name TEXT, 
-                  phone TEXT UNIQUE, 
-                  status TEXT DEFAULT "חדש")''')
+    c.execute('CREATE TABLE IF NOT EXISTS clients (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, phone TEXT UNIQUE, status TEXT DEFAULT "חדש")')
     conn.commit(); conn.close()
 
-def sync_data():
+def reset_db():
+    conn = sqlite3.connect('crm.db')
+    conn.execute('DROP TABLE IF EXISTS clients')
+    conn.execute('CREATE TABLE clients (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, phone TEXT UNIQUE, status TEXT DEFAULT "חדש")')
+    conn.commit(); conn.close()
+
+def sync():
     conn = sqlite3.connect('crm.db')
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(st.secrets["EMAIL_ACCOUNT"], st.secrets["APP_PASSWORD"])
         mail.select("inbox")
-        _, msgs = mail.search(None, '(UNSEEN FROM "CallBiz@callbiz.co.il")')
-        
+        _, msgs = mail.search(None, '(UNSEEN)')
         for num in msgs[0].split():
             _, data = mail.fetch(num, "(RFC822)")
             msg = email.message_from_bytes(data[0][1])
             body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
-            text = BeautifulSoup(body, "html.parser").get_text()
-            phone = re.search(r"(\d{9,10})", text)
-            
+            phone = re.search(r"(\d{9,10})", text := BeautifulSoup(body, "html.parser").get_text())
             if phone:
-                # INSERT OR IGNORE מונע יצירת שורה חדשה אם הטלפון כבר קיים
-                conn.execute("INSERT OR IGNORE INTO clients (name, phone) VALUES (?, ?)", ("לקוח חדש", phone.group(1)))
-            
-            # מסמן כנקרא כדי שלא יקרא שוב
+                try: conn.execute("INSERT INTO clients (name, phone) VALUES (?, ?)", ("לקוח חדש", phone.group(1)))
+                except: pass
             mail.store(num, "+FLAGS", "\\Seen")
-        
-        conn.execute("DELETE FROM clients WHERE phone='-' OR phone='' OR phone IS NULL")
-        conn.commit()
-        return True
+        conn.commit(); return True
     except: return False
     finally: conn.close()
 
-# ממשק
+# ממשק מעוצב
 init_db()
 st.markdown('<div class="card"><h1>💼 מערכת CallBiz CRM</h1></div>', unsafe_allow_html=True)
 
-if st.button("🔄 סנכרן ונקו כפילויות"):
-    if sync_data(): st.success("הנתונים סונכרנו ונוקו מכפילויות!")
-    else: st.error("שגיאה בסנכרון.")
-    st.rerun()
+col1, col2 = st.columns([1, 3])
+with col1:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    if st.button("🔄 סנכרן נתונים"):
+        sync(); st.rerun()
+    if st.button("🗑️ איפוס מלא"):
+        reset_db(); st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
-st.markdown('<div class="card">', unsafe_allow_html=True)
-conn = sqlite3.connect('crm.db')
-df = pd.read_sql_query("SELECT * FROM clients", conn)
-st.dataframe(df, use_container_width=True, hide_index=True)
-conn.close()
-st.markdown('</div>', unsafe_allow_html=True)
+with col2:
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("📋 לקוחות")
+    df = pd.read_sql_query("SELECT * FROM clients", sqlite3.connect('crm.db'))
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.markdown('</div>', unsafe_allow_html=True)
