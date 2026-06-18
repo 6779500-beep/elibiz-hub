@@ -16,7 +16,8 @@ st.html("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap');
 * { font-family: 'Heebo', sans-serif !important; }
-html, body, [data-testid="stAppViewContainer"] { font-size: 17px; }
+html { font-size: 19px !important; }
+body, [data-testid="stAppViewContainer"], [data-testid="stMain"] { font-size: 1rem !important; }
 .stApp {
     direction: rtl; text-align: right;
     background-color: #f6f4ef;
@@ -28,18 +29,37 @@ html, body, [data-testid="stAppViewContainer"] { font-size: 17px; }
 }
 [data-testid="stAppViewContainer"] { background-color: transparent; }
 
-p, span, div, label { font-size: 16px; }
+/* טקסט כללי - גופן גדול ובולט בכל מקום */
+p, span, div, label, li, a { font-size: 1rem !important; }
 h1, h2, h3 { color: #1f2440; }
-.stMarkdown p { font-size: 16px; line-height: 1.6; }
-.stTextInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] span,
-.stDateInput input, .stNumberInput input {
-    font-size: 16px !important; padding: 10px !important;
+[data-testid="stMarkdownContainer"], [data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li, [data-testid="stMarkdownContainer"] span {
+    font-size: 1.05rem !important; line-height: 1.7 !important; font-weight: 500 !important;
 }
-.stTextInput label, .stTextArea label, .stSelectbox label, .stDateInput label {
-    font-size: 14.5px !important; font-weight: 600 !important; color: #4a4536 !important;
+[data-testid="stCaptionContainer"] { font-size: 0.9rem !important; }
+
+/* כותרות */
+[data-testid="stHeading"] h1 { font-size: 2rem !important; font-weight: 800 !important; }
+[data-testid="stHeading"] h2 { font-size: 1.6rem !important; font-weight: 800 !important; }
+[data-testid="stHeading"] h3 { font-size: 1.35rem !important; font-weight: 800 !important; }
+
+/* שדות קלט */
+.stTextInput input, .stTextArea textarea, .stNumberInput input, .stDateInput input, .stTimeInput input {
+    font-size: 1.05rem !important; padding: 12px !important; font-weight: 500 !important;
 }
-.stButton>button { font-size: 16px; }
-h2.st-emotion-cache-subheader, .stSubheader, [data-testid="stHeading"] h3 { font-weight: 800 !important; }
+.stSelectbox div[data-baseweb="select"] * { font-size: 1.05rem !important; font-weight: 500 !important; }
+[data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] label {
+    font-size: 1rem !important; font-weight: 700 !important; color: #3a3526 !important;
+}
+
+/* כפתורים */
+.stButton>button, .stButton>button p, .stDownloadButton>button {
+    font-size: 1.05rem !important; font-weight: 700 !important;
+}
+
+/* מטריקות בלוח הסטטיסטיקות */
+[data-testid="stMetricValue"] { font-size: 2rem !important; font-weight: 800 !important; }
+[data-testid="stMetricLabel"] { font-size: 1rem !important; font-weight: 600 !important; }
 
 /* לוגו */
 .brand-logo { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 6px; }
@@ -170,7 +190,7 @@ h2.st-emotion-cache-subheader, .stSubheader, [data-testid="stHeading"] h3 { font
 @media (max-width: 700px) {
     .cell-id { display: none; }
 
-    html, body, [data-testid="stAppViewContainer"] { font-size: 15.5px; }
+    html { font-size: 17px !important; }
     .card { padding: 14px; }
     .main-subtitle { font-size: 12px; }
     .brand-mark { width: 42px; height: 42px; font-size: 18px; }
