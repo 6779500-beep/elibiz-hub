@@ -20,3 +20,24 @@ st.write("המערכת עובדת!")
 # בדיקת כפתור פשוטה
 if st.button("בדיקת סנכרון"):
     st.success("הקוד רץ בצורה תקינה!")
+import imaplib
+import email
+
+def fetch_emails():
+    try:
+        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        mail.login(st.secrets["EMAIL_ACCOUNT"], st.secrets["APP_PASSWORD"])
+        mail.select("inbox")
+        status, messages = mail.search(None, '(UNSEEN FROM "CallBiz@callbiz.co.il")')
+        if status == "OK" and messages[0]:
+            mail.logout()
+            return f"נמצאו הודעות חדשות!"
+        mail.logout()
+        return "אין הודעות חדשות."
+    except Exception as e:
+        return f"שגיאה בחיבור: {e}"
+
+# הוספת כפתור לסנכרון בממשק הקיים
+if st.button("סנכרן מיילים"):
+    res = fetch_emails()
+    st.write(res)
