@@ -43,7 +43,7 @@ def sync_all():
         conn.commit(); conn.close(); mail.logout()
         return "הסנכרון הושלם בהצלחה!"
     except: return "שגיאת סנכרון."
-        init_db()
+init_db()
 st.title("💼 CallBiz CRM")
 if st.button("🔄 סנכרן עכשיו"):
     st.success(sync_all()); st.rerun()
