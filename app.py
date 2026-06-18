@@ -149,6 +149,17 @@ st.html("""
 .pending-item:hover { background: #fbf6e6; }
 .pending-item .pending-title { color: #1f2440; font-weight: 600; font-size: 14px; }
 .pending-item .pending-meta { color: #8a8472; font-size: 12px; margin-top: 2px; }
+
+/* תגיות תיעדוף */
+.priority-urgent { background:#fbe2e1; color:#a13b32; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+.priority-soon { background:#fdebd3; color:#9a5b13; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+.priority-week { background:#dcf2ee; color:#0f766e; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+
+/* תגיות סיווג */
+.category-new { background:#e3eefc; color:#2563a8; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+.category-retention { background:#e6f4ea; color:#2f7d4f; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+.category-recruit { background:#efe6fb; color:#6b3fa0; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+.category-recruit-retention { background:#fbe7ee; color:#a13d63; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
 </style>
 """)
 
@@ -178,6 +189,8 @@ def init_db():
         ("phone3", "TEXT DEFAULT ''"),
         ("phone3_label", "TEXT DEFAULT 'נייח'"),
         ("follow_up_date", "TEXT DEFAULT ''"),
+        ("priority", "TEXT DEFAULT ''"),
+        ("category", "TEXT DEFAULT ''"),
     ]:
         if col_name not in existing_cols:
             c.execute(f"ALTER TABLE clients ADD COLUMN {col_name} {col_def}")
@@ -269,7 +282,7 @@ def sync_data():
 # --- שאילתות עזר ---
 def get_clients(search=""):
     conn = sqlite3.connect('crm.db')
-    query = "SELECT id, name, phone, phone2, id_number, status, created_at FROM clients"
+    query = "SELECT id, name, phone, phone2, id_number, status, priority, category, created_at FROM clients"
     params = ()
     if search.strip():
         query += " WHERE name LIKE ? OR phone LIKE ? OR phone2 LIKE ? OR phone3 LIKE ? OR id_number LIKE ?"
@@ -405,6 +418,21 @@ STATUS_BADGE_CLASS = {
 }
 STATUS_OPTIONS = ["חדש", "בטיפול", "לטיפול עתידי", "נסגר", "לא רלוונטי"]
 
+PRIORITY_BADGE_CLASS = {
+    "דחוף": "priority-urgent",
+    "לטיפול בהקדם": "priority-soon",
+    "בשבוע-שבועיים הקרובים": "priority-week",
+}
+PRIORITY_OPTIONS = ["", "דחוף", "לטיפול בהקדם", "בשבוע-שבועיים הקרובים"]
+
+CATEGORY_BADGE_CLASS = {
+    "לקוח חדש": "category-new",
+    "שימור קיים": "category-retention",
+    "גיוס פוטנציאלי": "category-recruit",
+    "שימור גיוס": "category-recruit-retention",
+}
+CATEGORY_OPTIONS = ["", "לקוח חדש", "שימור קיים", "גיוס פוטנציאלי", "שימור גיוס"]
+
 # --- ניתוב לפי פרמטרי כתובת ---
 view = st.query_params.get("view")
 selected_client_id = st.query_params.get("client_id")
@@ -486,13 +514,21 @@ elif selected_client_id is not None and get_client(selected_client_id):
 
     if client:
         (c_id, c_name, c_phone, c_status, c_created,
-         c_id_number, c_phone2, c_phone2_label, c_phone3, c_phone3_label, c_followup) = client
+         c_id_number, c_phone2, c_phone2_label, c_phone3, c_phone3_label, c_followup,
+         c_priority, c_category) = client
+
+        badges_html = f'<span class="{STATUS_BADGE_CLASS.get(c_status, "status-irrelevant")}">{c_status}</span>'
+        if c_priority:
+            badges_html += f' <span class="{PRIORITY_BADGE_CLASS.get(c_priority, "")}">{c_priority}</span>'
+        if c_category:
+            badges_html += f' <span class="{CATEGORY_BADGE_CLASS.get(c_category, "")}">{c_category}</span>'
 
         # כותרת תיק
         st.markdown(f'''
         <div class="client-header">
           <h3>📂 תיק לקוח: {c_name}</h3>
           <p>📞 {c_phone} &nbsp;|&nbsp; 🗓 נקלט: {c_created[:10] if c_created else "-"}</p>
+          <p>{badges_html}</p>
         </div>
         ''', unsafe_allow_html=True)
 
@@ -522,6 +558,16 @@ elif selected_client_id is not None and get_client(selected_client_id):
                 followup_input = st.date_input("מועד טיפול עתידי", value=followup_value, key=f"followup_{client_id}")
                 new_followup_date = followup_input.isoformat() if followup_input else ""
 
+            col_prio, col_cat = st.columns(2)
+            with col_prio:
+                prio_idx = PRIORITY_OPTIONS.index(c_priority) if c_priority in PRIORITY_OPTIONS else 0
+                new_priority = st.selectbox("תיעדוף", options=PRIORITY_OPTIONS,
+                                             index=prio_idx, key=f"priority_{client_id}")
+            with col_cat:
+                cat_idx = CATEGORY_OPTIONS.index(c_category) if c_category in CATEGORY_OPTIONS else 0
+                new_category = st.selectbox("סיווג", options=CATEGORY_OPTIONS,
+                                             index=cat_idx, key=f"category_{client_id}")
+
             st.markdown("##### טלפונים נוספים")
             col_p2, col_p2l = st.columns([2, 1])
             with col_p2:
@@ -544,11 +590,13 @@ elif selected_client_id is not None and get_client(selected_client_id):
                 try:
                     conn.execute(
                         """UPDATE clients SET name=?, phone=?, status=?, id_number=?,
-                           phone2=?, phone2_label=?, phone3=?, phone3_label=?, follow_up_date=?
+                           phone2=?, phone2_label=?, phone3=?, phone3_label=?, follow_up_date=?,
+                           priority=?, category=?
                            WHERE id=?""",
                         (new_name, new_phone, new_status, new_id_number,
                          new_phone2, new_phone2_label, new_phone3, new_phone3_label,
                          new_followup_date if new_status == "לטיפול עתידי" else "",
+                         new_priority, new_category,
                          client_id))
                     conn.commit()
                     st.success("הפרטים נשמרו!")
@@ -855,20 +903,28 @@ else:
     else:
         rows_html = '''
         <div class="client-table-header">
-            <div class="cell cell-id" style="flex:0 0 70px">מזהה</div>
-            <div class="cell" style="flex:2">שם לקוח</div>
-            <div class="cell" style="flex:1.5">טלפון</div>
+            <div class="cell cell-id" style="flex:0 0 60px">מזהה</div>
+            <div class="cell" style="flex:1.8">שם לקוח</div>
+            <div class="cell" style="flex:1.3">טלפון</div>
             <div class="cell" style="flex:1">סטטוס</div>
+            <div class="cell" style="flex:1.2">תיעדוף</div>
+            <div class="cell" style="flex:1.2">סיווג</div>
         </div>
         '''
         for _, row in df.iterrows():
             badge_class = STATUS_BADGE_CLASS.get(row['status'], "status-irrelevant")
+            priority_html = (f'<span class="{PRIORITY_BADGE_CLASS.get(row["priority"], "")}">{row["priority"]}</span>'
+                              if row['priority'] else '<span style="color:#c7c2b3">—</span>')
+            category_html = (f'<span class="{CATEGORY_BADGE_CLASS.get(row["category"], "")}">{row["category"]}</span>'
+                              if row['category'] else '<span style="color:#c7c2b3">—</span>')
             rows_html += f'''
             <a class="client-row" href="?client_id={int(row['id'])}" target="_self">
-                <div class="cell cell-id" style="flex:0 0 70px">{int(row['id'])}</div>
-                <div class="cell" style="flex:2">{row['name']}</div>
-                <div class="cell cell-phone" style="flex:1.5">{row['phone']}</div>
+                <div class="cell cell-id" style="flex:0 0 60px">{int(row['id'])}</div>
+                <div class="cell" style="flex:1.8">{row['name']}</div>
+                <div class="cell cell-phone" style="flex:1.3">{row['phone']}</div>
                 <div class="cell" style="flex:1"><span class="{badge_class}">{row['status']}</span></div>
+                <div class="cell" style="flex:1.2">{priority_html}</div>
+                <div class="cell" style="flex:1.2">{category_html}</div>
             </a>
             '''
         st.html(rows_html)
