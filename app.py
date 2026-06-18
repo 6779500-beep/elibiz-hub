@@ -16,8 +16,44 @@ st.html("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap');
 * { font-family: 'Heebo', sans-serif !important; }
-.stApp { direction: rtl; text-align: right; background-color: #f6f4ef; }
-[data-testid="stAppViewContainer"] { background-color: #f6f4ef; }
+html, body, [data-testid="stAppViewContainer"] { font-size: 17px; }
+.stApp {
+    direction: rtl; text-align: right;
+    background-color: #f6f4ef;
+    background-image:
+        radial-gradient(circle at 8% 8%, rgba(201,162,39,0.07) 0%, transparent 45%),
+        radial-gradient(circle at 95% 18%, rgba(31,36,64,0.05) 0%, transparent 40%),
+        linear-gradient(180deg, #f8f6f1 0%, #f3f0e8 100%);
+    background-attachment: fixed;
+}
+[data-testid="stAppViewContainer"] { background-color: transparent; }
+
+p, span, div, label { font-size: 16px; }
+h1, h2, h3 { color: #1f2440; }
+.stMarkdown p { font-size: 16px; line-height: 1.6; }
+.stTextInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] span,
+.stDateInput input, .stNumberInput input {
+    font-size: 16px !important; padding: 10px !important;
+}
+.stTextInput label, .stTextArea label, .stSelectbox label, .stDateInput label {
+    font-size: 14.5px !important; font-weight: 600 !important; color: #4a4536 !important;
+}
+.stButton>button { font-size: 16px; }
+h2.st-emotion-cache-subheader, .stSubheader, [data-testid="stHeading"] h3 { font-weight: 800 !important; }
+
+/* לוגו */
+.brand-logo { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 6px; }
+.brand-mark {
+    width: 52px; height: 52px; border-radius: 50%; flex-shrink: 0;
+    background: linear-gradient(135deg, #1f2440, #2b3160);
+    border: 2px solid #c9a227; color: #f3e9c8;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 22px; font-family: 'Heebo', sans-serif;
+    box-shadow: 0 3px 10px rgba(31,28,53,0.25);
+}
+.brand-text { text-align: right; }
+.brand-text .brand-name { font-size: 24px; font-weight: 800; color: #1f2440; letter-spacing: 0.5px; }
+.brand-text .brand-tagline { font-size: 13px; color: #a9802e; font-weight: 600; letter-spacing: 1px; }
 
 /* שורת התראות */
 .alert-bar {
@@ -117,32 +153,21 @@ st.html("""
 .urgent-box .urgent-desc { color: #1e293b; font-weight: 600; font-size: 14px; }
 .urgent-box .urgent-meta { color: #8a6300; font-size: 12px; margin-top: 2px; }
 
-/* טבלת לקוחות מותאמת - תצוגה אוורירית */
-.client-table-header {
-    display: flex; align-items: center; padding: 8px 22px;
-    color: #a39c87; font-size: 11px; font-weight: 700;
-    letter-spacing: 0.4px;
-}
-.client-row {
-    display: flex; align-items: center; padding: 18px 22px;
-    background: #ffffff; text-decoration: none !important;
-    border-radius: 12px; margin-bottom: 10px;
-    border: 1px solid #f1eee5;
+/* טבלת לקוחות מותאמת - תצוגה אוורירית, עם עריכה מהירה בתוך השורה */
+.client-row-inline {
+    background: #ffffff; border-radius: 12px; margin-bottom: 10px;
+    border: 1px solid #f1eee5; padding: 14px 18px 2px 18px;
     box-shadow: 0 1px 4px rgba(31,28,53,0.03);
-    transition: all 0.15s ease;
+    transition: box-shadow 0.15s ease;
 }
-.client-row:hover { background: #fffdf6; box-shadow: 0 4px 14px rgba(201,162,39,0.15); transform: translateY(-1px); }
-.client-row.selected { background: #fbf3d6; border-right: 4px solid #c9a227; }
-.client-row .cell { color: #1f2440; font-size: 14px; }
-.client-row .cell-id { color: #a39c87; font-size: 13px; }
-.client-row .cell-phone { direction: ltr; text-align: right; }
-.client-row .cell-phone a { color: #1f2440; text-decoration: none; }
-.client-row .cell-phone a:hover { color: #c9a227; }
+.client-row-inline:hover { box-shadow: 0 4px 14px rgba(201,162,39,0.15); }
+.cell-id { color: #a39c87; font-size: 13px; }
+.row-name-link { color: #1f2440; font-weight: 700; font-size: 15px; text-decoration: none; }
+.row-name-link:hover { color: #c9a227; }
+.cell-phone-text { color: #1f2440; direction: ltr; text-align: right; display: inline-block; }
 
 @media (max-width: 700px) {
-    .client-row { flex-wrap: wrap; gap: 6px; }
-    .client-row .cell-id { display: none; }
-    .client-table-header .cell-id { display: none; }
+    .cell-id { display: none; }
 }
 
 /* התראה על כפילות אפשרית */
@@ -203,6 +228,7 @@ def init_db():
         ("priority", "TEXT DEFAULT ''"),
         ("category", "TEXT DEFAULT ''"),
         ("updated_at", "TEXT DEFAULT ''"),
+        ("address", "TEXT DEFAULT ''"),
     ]:
         if col_name not in existing_cols:
             c.execute(f"ALTER TABLE clients ADD COLUMN {col_name} {col_def}")
@@ -214,6 +240,16 @@ def init_db():
         old_status TEXT,
         new_status TEXT,
         changed_at TEXT DEFAULT (datetime('now','localtime')),
+        FOREIGN KEY(client_id) REFERENCES clients(id)
+    )''')
+
+    # טבלת בני משפחה
+    c.execute('''CREATE TABLE IF NOT EXISTS family_members (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id INTEGER,
+        name TEXT,
+        id_number TEXT,
+        created_at TEXT DEFAULT (datetime('now','localtime')),
         FOREIGN KEY(client_id) REFERENCES clients(id)
     )''')
 
@@ -498,14 +534,28 @@ def get_files(client_id):
     conn.close()
     return rows
 
+def get_family_members(client_id):
+    conn = sqlite3.connect('crm.db')
+    rows = conn.execute(
+        "SELECT id, name, id_number, created_at FROM family_members WHERE client_id=? ORDER BY created_at",
+        (client_id,)).fetchall()
+    conn.close()
+    return rows
+
 init_db()
 
 # ===== ממשק ראשי =====
 
-# כותרת
+# כותרת + לוגו
 st.markdown('''
 <div class="card">
-  <p class="main-title">💼 מערכת ניהול לקוחות CallBiz</p>
+  <div class="brand-logo">
+    <div class="brand-mark">CB</div>
+    <div class="brand-text">
+      <div class="brand-name">CallBiz CRM</div>
+      <div class="brand-tagline">ניהול לקוחות &amp; לידים</div>
+    </div>
+  </div>
   <p class="main-subtitle">ריכוז לידים, ניהול תיקי לקוח ומשימות</p>
 </div>
 ''', unsafe_allow_html=True)
@@ -656,7 +706,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
     if client:
         (c_id, c_name, c_phone, c_status, c_created,
          c_id_number, c_phone2, c_phone2_label, c_phone3, c_phone3_label, c_followup,
-         c_priority, c_category, c_updated) = client
+         c_priority, c_category, c_updated, c_address) = client
 
         badges_html = f'<span class="{STATUS_BADGE_CLASS.get(c_status, "status-irrelevant")}">{c_status}</span>'
         if c_priority:
@@ -672,6 +722,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
           <h3>📂 תיק לקוח: {c_name}</h3>
           <p>📞 <a href="tel:{c_phone}" style="color:#f3e9c8">{c_phone}</a> &nbsp;|&nbsp; 🗓 נקלט: {c_created[:10] if c_created else "-"}
           &nbsp;|&nbsp; 🕒 עודכן לאחרונה: {last_touch[:16] if last_touch else "-"}</p>
+          {f'<p>📍 {c_address}</p>' if c_address else ''}
           <p>{badges_html}</p>
         </div>
         ''', unsafe_allow_html=True)
@@ -729,6 +780,8 @@ elif selected_client_id is not None and get_client(selected_client_id):
                 p3l_idx = phone3_labels.index(c_phone3_label) if c_phone3_label in phone3_labels else 0
                 new_phone3_label = st.selectbox("סוג", options=phone3_labels, index=p3l_idx, key=f"phone3l_{client_id}")
 
+            new_address = st.text_input("כתובת", value=c_address or "", key=f"address_{client_id}")
+
             if st.button("💾 שמור פרטים", key=f"save_details_{client_id}"):
                 final_status = "בטיפול" if new_status == "חדש" else new_status
                 conn = sqlite3.connect('crm.db')
@@ -736,12 +789,12 @@ elif selected_client_id is not None and get_client(selected_client_id):
                     conn.execute(
                         """UPDATE clients SET name=?, phone=?, status=?, id_number=?,
                            phone2=?, phone2_label=?, phone3=?, phone3_label=?, follow_up_date=?,
-                           priority=?, category=?, updated_at=datetime('now','localtime')
+                           priority=?, category=?, address=?, updated_at=datetime('now','localtime')
                            WHERE id=?""",
                         (new_name, new_phone, final_status, new_id_number,
                          new_phone2, new_phone2_label, new_phone3, new_phone3_label,
                          new_followup_date if final_status == "לטיפול עתידי" else "",
-                         new_priority, new_category,
+                         new_priority, new_category, new_address.strip(),
                          client_id))
                     conn.commit()
                     log_status_change(client_id, c_status, final_status)
@@ -753,6 +806,51 @@ elif selected_client_id is not None and get_client(selected_client_id):
                     st.error("מספר הטלפון כבר קיים במערכת.")
                 finally:
                     conn.close()
+
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            # --- בני משפחה ---
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.subheader("👨‍👩‍👧 בני משפחה")
+
+            with st.form(key=f"family_form_{client_id}", clear_on_submit=True):
+                col_fn, col_fid = st.columns(2)
+                with col_fn:
+                    family_name = st.text_input("שם בן/בת משפחה")
+                with col_fid:
+                    family_id_number = st.text_input("תעודת זהות")
+                if st.form_submit_button("➕ הוסף בן משפחה"):
+                    if family_name.strip():
+                        conn = sqlite3.connect('crm.db')
+                        conn.execute(
+                            "INSERT INTO family_members (client_id, name, id_number) VALUES (?,?,?)",
+                            (client_id, family_name.strip(), family_id_number.strip()))
+                        conn.commit()
+                        conn.close()
+                        touch_and_bump(client_id)
+                        st.success("בן המשפחה נוסף!")
+                        st.rerun()
+
+            family_members = get_family_members(client_id)
+            if not family_members:
+                st.info("לא נוספו בני משפחה.")
+            else:
+                for fm_id, fm_name, fm_idnum, fm_created in family_members:
+                    col_fm1, col_fm2 = st.columns([9, 1])
+                    with col_fm1:
+                        id_part = f" &nbsp;|&nbsp; ת.ז: {fm_idnum}" if fm_idnum else ""
+                        st.markdown(f'''
+                        <div class="note-item">
+                          <div class="note-text">👤 {fm_name}{id_part}</div>
+                        </div>
+                        ''', unsafe_allow_html=True)
+                    with col_fm2:
+                        if st.button("🗑", key=f"del_family_{fm_id}"):
+                            conn = sqlite3.connect('crm.db')
+                            conn.execute("DELETE FROM family_members WHERE id=?", (fm_id,))
+                            conn.commit()
+                            conn.close()
+                            st.rerun()
 
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1093,32 +1191,51 @@ else:
     if df.empty:
         st.info("לא נמצאו לקוחות.")
     else:
-        rows_html = '''
-        <div class="client-table-header">
-            <div class="cell cell-id" style="flex:0 0 60px">מזהה</div>
-            <div class="cell" style="flex:1.8">שם לקוח</div>
-            <div class="cell" style="flex:1.3">טלפון</div>
-            <div class="cell" style="flex:1">סטטוס</div>
-            <div class="cell" style="flex:1.2">תיעדוף</div>
-            <div class="cell" style="flex:1.2">סיווג</div>
-        </div>
-        '''
+        header_cols = st.columns([0.5, 1.8, 1.3, 1.2, 1.2, 1.2])
+        header_labels = ["מזהה", "שם לקוח", "טלפון", "סטטוס", "תיעדוף", "סיווג"]
+        for hc, label in zip(header_cols, header_labels):
+            hc.markdown(f'<span style="color:#a39c87;font-size:11px;font-weight:700">{label}</span>', unsafe_allow_html=True)
+
         for _, row in df.iterrows():
-            badge_class = STATUS_BADGE_CLASS.get(row['status'], "status-irrelevant")
-            priority_html = (f'<span class="{PRIORITY_BADGE_CLASS.get(row["priority"], "")}">{row["priority"]}</span>'
-                              if row['priority'] else '<span style="color:#c7c2b3">—</span>')
-            category_html = (f'<span class="{CATEGORY_BADGE_CLASS.get(row["category"], "")}">{row["category"]}</span>'
-                              if row['category'] else '<span style="color:#c7c2b3">—</span>')
-            rows_html += f'''
-            <a class="client-row" href="?client_id={int(row['id'])}" target="_self">
-                <div class="cell cell-id" style="flex:0 0 60px">{int(row['id'])}</div>
-                <div class="cell" style="flex:1.8">{row['name']}</div>
-                <div class="cell cell-phone" style="flex:1.3">{row['phone']}</div>
-                <div class="cell" style="flex:1"><span class="{badge_class}">{row['status']}</span></div>
-                <div class="cell" style="flex:1.2">{priority_html}</div>
-                <div class="cell" style="flex:1.2">{category_html}</div>
-            </a>
-            '''
-        st.html(rows_html)
+            cid = int(row['id'])
+            st.markdown('<div class="client-row-inline">', unsafe_allow_html=True)
+            cols = st.columns([0.5, 1.8, 1.3, 1.2, 1.2, 1.2])
+            with cols[0]:
+                st.markdown(f"<span class='cell-id'>{cid}</span>", unsafe_allow_html=True)
+            with cols[1]:
+                st.markdown(f"<a class='row-name-link' href='?client_id={cid}' target='_self'>{row['name']}</a>",
+                             unsafe_allow_html=True)
+            with cols[2]:
+                st.markdown(f"<span class='cell-phone-text'>{row['phone']}</span>", unsafe_allow_html=True)
+            with cols[3]:
+                s_idx = STATUS_OPTIONS.index(row['status']) if row['status'] in STATUS_OPTIONS else 0
+                sel_status = st.selectbox("סטטוס", STATUS_OPTIONS, index=s_idx,
+                                           key=f"list_status_{cid}", label_visibility="collapsed")
+                if sel_status != row['status']:
+                    conn = sqlite3.connect('crm.db')
+                    conn.execute(
+                        "UPDATE clients SET status=?, updated_at=datetime('now','localtime') WHERE id=?",
+                        (sel_status, cid))
+                    conn.commit()
+                    conn.close()
+                    log_status_change(cid, row['status'], sel_status)
+                    st.rerun()
+            with cols[4]:
+                p_idx = PRIORITY_OPTIONS.index(row['priority']) if row['priority'] in PRIORITY_OPTIONS else 0
+                sel_priority = st.selectbox("תיעדוף", PRIORITY_OPTIONS, index=p_idx,
+                                             key=f"list_priority_{cid}", label_visibility="collapsed")
+                if sel_priority != row['priority']:
+                    conn = sqlite3.connect('crm.db')
+                    conn.execute(
+                        "UPDATE clients SET priority=?, updated_at=datetime('now','localtime') WHERE id=?",
+                        (sel_priority, cid))
+                    conn.commit()
+                    conn.close()
+                    st.rerun()
+            with cols[5]:
+                category_html = (f'<span class="{CATEGORY_BADGE_CLASS.get(row["category"], "")}">{row["category"]}</span>'
+                                  if row['category'] else '<span style="color:#c7c2b3">—</span>')
+                st.markdown(category_html, unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
