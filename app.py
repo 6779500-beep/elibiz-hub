@@ -16,24 +16,25 @@ st.html("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap');
 * { font-family: 'Heebo', sans-serif !important; }
-.stApp { direction: rtl; text-align: right; background-color: #f0f4f8; }
-[data-testid="stAppViewContainer"] { background-color: #f0f4f8; }
+.stApp { direction: rtl; text-align: right; background-color: #f6f4ef; }
+[data-testid="stAppViewContainer"] { background-color: #f6f4ef; }
 
 /* שורת התראות */
 .alert-bar {
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    background: linear-gradient(135deg, #15182e 0%, #1f2440 50%, #2b1f47 100%);
     color: white; padding: 12px 24px; border-radius: 12px;
     margin-bottom: 20px; display: flex; align-items: center;
     gap: 16px; flex-wrap: wrap; direction: rtl;
-    box-shadow: 0 4px 15px rgba(15,52,96,0.3);
+    box-shadow: 0 4px 15px rgba(20,16,40,0.35);
+    border: 1px solid rgba(201,162,39,0.25);
 }
 .alert-badge {
-    background: #e74c3c; color: white; border-radius: 20px;
+    background: linear-gradient(135deg, #b3472f, #8e2f3a); color: white; border-radius: 20px;
     padding: 4px 12px; font-weight: 700; font-size: 13px;
     animation: pulse 2s infinite;
 }
 .alert-badge-warn {
-    background: #f39c12; color: white; border-radius: 20px;
+    background: linear-gradient(135deg, #c9a227, #a9791a); color: #1f1500; border-radius: 20px;
     padding: 4px 12px; font-weight: 700; font-size: 13px;
 }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
@@ -41,46 +42,49 @@ st.html("""
 /* כרטיסיות */
 .card {
     background: white; padding: 24px; border-radius: 14px;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.06); margin-bottom: 20px;
-    border: 1px solid #e8eef3;
+    box-shadow: 0 4px 18px rgba(31,28,53,0.07); margin-bottom: 20px;
+    border: 1px solid #ece7da; border-top: 3px solid #c9a227;
 }
 
 /* כותרת ראשית */
 .main-title {
-    color: #1a1a2e; text-align: center; font-weight: 800;
+    color: #1f2440; text-align: center; font-weight: 800;
     font-size: 28px; margin-bottom: 4px;
 }
 .main-subtitle {
-    color: #6b7280; text-align: center; font-size: 14px;
+    color: #8a8472; text-align: center; font-size: 14px;
     margin-bottom: 0;
 }
 
 /* כפתורים */
 .stButton>button {
-    background-color: #3498db; color: white; border-radius: 8px;
-    font-weight: 600; border: none; padding: 10px 20px;
+    background: linear-gradient(135deg, #1f2440, #2b3160); color: #f3e9c8; border-radius: 8px;
+    font-weight: 600; border: 1px solid #c9a227; padding: 10px 20px;
     transition: all 0.2s ease; width: 100%;
 }
-.stButton>button:hover { background-color: #2980b9; transform: translateY(-1px); }
+.stButton>button:hover {
+    background: linear-gradient(135deg, #2b3160, #3a4180); color: #ffffff;
+    border-color: #e0bb3a; transform: translateY(-1px);
+}
 
 /* תגיות סטטוס */
-.status-new { background:#dbeafe; color:#1d4ed8; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
-.status-inprogress { background:#fef9c3; color:#854d0e; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
-.status-closed { background:#dcfce7; color:#166534; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
-.status-irrelevant { background:#f3f4f6; color:#6b7280; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+.status-new { background:#e7edfb; color:#1d3a8f; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+.status-inprogress { background:#fdf0d5; color:#92660b; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+.status-closed { background:#e3f5ec; color:#0f7a4e; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+.status-irrelevant { background:#eef0f2; color:#5b6472; padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
 
 /* תיק לקוח */
 .client-header {
-    background: linear-gradient(135deg, #3498db, #2980b9);
-    color: white; padding: 16px 20px; border-radius: 10px;
-    margin-bottom: 16px;
+    background: linear-gradient(135deg, #1f2440, #2b3160);
+    color: #f3e9c8; padding: 16px 20px; border-radius: 10px;
+    margin-bottom: 16px; border: 1px solid #c9a227;
 }
-.client-header h3 { margin:0; font-size:18px; font-weight:700; }
+.client-header h3 { margin:0; font-size:18px; font-weight:700; color:#ffffff; }
 .client-header p { margin:4px 0 0 0; opacity:0.85; font-size:13px; }
 
 /* הערות */
 .note-item {
-    background: #f8fafc; border-right: 3px solid #3498db;
+    background: #faf9f5; border-right: 3px solid #c9a227;
     padding: 10px 14px; border-radius: 0 8px 8px 0;
     margin-bottom: 8px;
 }
@@ -89,7 +93,7 @@ st.html("""
 
 /* משימות */
 .task-item {
-    background: #f8fafc; border: 1px solid #e2e8f0;
+    background: #faf9f5; border: 1px solid #ece7da;
     padding: 10px 14px; border-radius: 8px; margin-bottom: 8px;
     display: flex; align-items: center; gap: 10px;
 }
@@ -97,21 +101,37 @@ st.html("""
 
 /* קבצים */
 .file-item {
-    background: #f8fafc; border: 1px solid #e2e8f0;
+    background: #faf9f5; border: 1px solid #ece7da;
     padding: 10px 14px; border-radius: 8px; margin-bottom: 8px;
     display: flex; align-items: center; gap: 10px;
 }
 
-[data-testid="stDataFrame"] { direction: rtl; }
 .stTabs [data-baseweb="tab"] { font-weight: 600; font-size: 14px; }
 
 /* לוח משימות דחופות גלובלי */
 .urgent-box {
-    background: #fff7ed; border-right: 4px solid #f59e0b;
+    background: #fdf6e3; border-right: 4px solid #c9a227;
     padding: 10px 14px; border-radius: 0 8px 8px 0; margin-bottom: 8px;
 }
 .urgent-box .urgent-desc { color: #1e293b; font-weight: 600; font-size: 14px; }
-.urgent-box .urgent-meta { color: #92400e; font-size: 12px; margin-top: 2px; }
+.urgent-box .urgent-meta { color: #8a6300; font-size: 12px; margin-top: 2px; }
+
+/* טבלת לקוחות מותאמת */
+.client-table-header {
+    display: flex; align-items: center; padding: 10px 16px;
+    color: #8a8472; font-size: 12px; font-weight: 700;
+    border-bottom: 2px solid #ece7da;
+}
+.client-row {
+    display: flex; align-items: center; padding: 14px 16px;
+    background: #ffffff; text-decoration: none !important;
+    border-bottom: 1px solid #f1eee5; transition: background 0.15s ease;
+}
+.client-row:hover { background: #fbf6e6; }
+.client-row.selected { background: #fbf3d6; border-right: 4px solid #c9a227; }
+.client-row .cell { color: #1f2440; font-size: 14px; }
+.client-row .cell-id { color: #8a8472; font-size: 13px; }
+.client-row .cell-phone { direction: ltr; text-align: right; }
 </style>
 """)
 
@@ -322,47 +342,51 @@ with col_sync:
         else:
             st.error(f"שגיאה: {result}")
 
+STATUS_BADGE_CLASS = {
+    "חדש": "status-new",
+    "בטיפול": "status-inprogress",
+    "נסגר": "status-closed",
+    "לא רלוונטי": "status-irrelevant",
+}
+
 # --- טבלת לקוחות ---
 st.markdown('<div class="card">', unsafe_allow_html=True)
 st.subheader("📋 רשימת לקוחות")
 
 df = get_clients()
 
+selected_client_id = st.query_params.get("client_id")
+selected_client_id = int(selected_client_id) if selected_client_id else None
+
 if df.empty:
     st.info("אין לקוחות במערכת. לחץ על 'סנכרן מייל' להוספת לקוחות.")
 else:
-    display_df = df.rename(columns={
-        'id': 'מזהה', 'name': 'שם לקוח',
-        'phone': 'טלפון', 'status': 'סטטוס', 'created_at': 'תאריך קליטה'
-    })
-
-    selection = st.dataframe(
-        display_df,
-        use_container_width=True,
-        hide_index=True,
-        selection_mode="single-row",
-        on_select="rerun",
-        column_config={
-            "מזהה": st.column_config.NumberColumn(width="small"),
-            "סטטוס": st.column_config.TextColumn(width="medium"),
-            "תאריך קליטה": st.column_config.TextColumn(width="medium"),
-        }
-    )
+    rows_html = '''
+    <div class="client-table-header">
+        <div class="cell cell-id" style="flex:0 0 70px">מזהה</div>
+        <div class="cell" style="flex:2">שם לקוח</div>
+        <div class="cell" style="flex:1.5">טלפון</div>
+        <div class="cell" style="flex:1">סטטוס</div>
+    </div>
+    '''
+    for _, row in df.iterrows():
+        badge_class = STATUS_BADGE_CLASS.get(row['status'], "status-irrelevant")
+        is_selected = selected_client_id == int(row['id'])
+        rows_html += f'''
+        <a class="client-row{' selected' if is_selected else ''}" href="?client_id={int(row['id'])}" target="_self">
+            <div class="cell cell-id" style="flex:0 0 70px">{int(row['id'])}</div>
+            <div class="cell" style="flex:2">{row['name']}</div>
+            <div class="cell cell-phone" style="flex:1.5">{row['phone']}</div>
+            <div class="cell" style="flex:1"><span class="{badge_class}">{row['status']}</span></div>
+        </a>
+        '''
+    st.html(rows_html)
 
 st.markdown('</div>', unsafe_allow_html=True)
 
 # --- תיק לקוח ---
-selected_rows = []
-if not df.empty and isinstance(selection, dict):
-    selected_rows = selection.get("selection", {}).get("rows", [])
-elif not df.empty and hasattr(selection, "selection"):
-    sel_obj = selection.selection
-    selected_rows = sel_obj.get("rows", []) if isinstance(sel_obj, dict) else (
-        sel_obj.rows if hasattr(sel_obj, "rows") else [])
-
-if selected_rows:
-    selected_idx = selected_rows[0]
-    client_id = int(df.iloc[selected_idx]['id'])
+if selected_client_id is not None:
+    client_id = selected_client_id
     client = get_client(client_id)
 
     if client:
