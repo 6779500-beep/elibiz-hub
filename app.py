@@ -166,8 +166,28 @@ h2.st-emotion-cache-subheader, .stSubheader, [data-testid="stHeading"] h3 { font
 .row-name-link:hover { color: #c9a227; }
 .cell-phone-text { color: #1f2440; direction: ltr; text-align: right; display: inline-block; }
 
+/* התאמה לנייד */
 @media (max-width: 700px) {
     .cell-id { display: none; }
+
+    html, body, [data-testid="stAppViewContainer"] { font-size: 15.5px; }
+    .card { padding: 14px; }
+    .main-subtitle { font-size: 12px; }
+    .brand-mark { width: 42px; height: 42px; font-size: 18px; }
+    .brand-text .brand-name { font-size: 19px; }
+    .brand-text .brand-tagline { font-size: 11px; }
+
+    .alert-bar { padding: 10px 14px; gap: 8px; font-size: 13px; }
+    .alert-badge, .alert-badge-warn { font-size: 12px; padding: 3px 9px; }
+
+    .client-header { padding: 12px 14px; }
+    .client-header h3 { font-size: 16px; }
+
+    [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; }
+    [data-testid="stHorizontalBlock"] [data-testid="stColumn"] {
+        min-width: 100% !important; flex: 1 1 100% !important;
+    }
+    .client-row-inline { padding: 12px 14px 6px 14px; }
 }
 
 /* התראה על כפילות אפשרית */
@@ -249,9 +269,13 @@ def init_db():
         client_id INTEGER,
         name TEXT,
         id_number TEXT,
+        relation TEXT DEFAULT '',
         created_at TEXT DEFAULT (datetime('now','localtime')),
         FOREIGN KEY(client_id) REFERENCES clients(id)
     )''')
+    family_cols = {row[1] for row in c.execute("PRAGMA table_info(family_members)").fetchall()}
+    if "relation" not in family_cols:
+        c.execute("ALTER TABLE family_members ADD COLUMN relation TEXT DEFAULT ''")
 
     # טבלת הערות
     c.execute('''CREATE TABLE IF NOT EXISTS notes (
@@ -343,9 +367,10 @@ def get_clients(search=""):
     query = "SELECT id, name, phone, phone2, id_number, status, priority, category, created_at FROM clients"
     params = ()
     if search.strip():
-        query += " WHERE name LIKE ? OR phone LIKE ? OR phone2 LIKE ? OR phone3 LIKE ? OR id_number LIKE ?"
+        query += """ WHERE name LIKE ? OR phone LIKE ? OR phone2 LIKE ? OR phone3 LIKE ? OR id_number LIKE ?
+            OR id IN (SELECT client_id FROM family_members WHERE name LIKE ? OR id_number LIKE ?)"""
         like = f"%{search.strip()}%"
-        params = (like, like, like, like, like)
+        params = (like, like, like, like, like, like, like)
     query += " ORDER BY id DESC"
     df = pd.read_sql_query(query, conn, params=params)
     conn.close()
@@ -537,10 +562,12 @@ def get_files(client_id):
 def get_family_members(client_id):
     conn = sqlite3.connect('crm.db')
     rows = conn.execute(
-        "SELECT id, name, id_number, created_at FROM family_members WHERE client_id=? ORDER BY created_at",
+        "SELECT id, name, id_number, relation, created_at FROM family_members WHERE client_id=? ORDER BY created_at",
         (client_id,)).fetchall()
     conn.close()
     return rows
+
+FAMILY_RELATION_OPTIONS = ["", "ילד/ילדה", "בן/בת זוג", "אחר"]
 
 init_db()
 
@@ -814,17 +841,19 @@ elif selected_client_id is not None and get_client(selected_client_id):
             st.subheader("👨‍👩‍👧 בני משפחה")
 
             with st.form(key=f"family_form_{client_id}", clear_on_submit=True):
-                col_fn, col_fid = st.columns(2)
+                col_fn, col_fid, col_frel = st.columns(3)
                 with col_fn:
                     family_name = st.text_input("שם בן/בת משפחה")
                 with col_fid:
                     family_id_number = st.text_input("תעודת זהות")
+                with col_frel:
+                    family_relation = st.selectbox("קרבה", options=FAMILY_RELATION_OPTIONS)
                 if st.form_submit_button("➕ הוסף בן משפחה"):
                     if family_name.strip():
                         conn = sqlite3.connect('crm.db')
                         conn.execute(
-                            "INSERT INTO family_members (client_id, name, id_number) VALUES (?,?,?)",
-                            (client_id, family_name.strip(), family_id_number.strip()))
+                            "INSERT INTO family_members (client_id, name, id_number, relation) VALUES (?,?,?,?)",
+                            (client_id, family_name.strip(), family_id_number.strip(), family_relation))
                         conn.commit()
                         conn.close()
                         touch_and_bump(client_id)
@@ -835,13 +864,14 @@ elif selected_client_id is not None and get_client(selected_client_id):
             if not family_members:
                 st.info("לא נוספו בני משפחה.")
             else:
-                for fm_id, fm_name, fm_idnum, fm_created in family_members:
+                for fm_id, fm_name, fm_idnum, fm_relation, fm_created in family_members:
                     col_fm1, col_fm2 = st.columns([9, 1])
                     with col_fm1:
                         id_part = f" &nbsp;|&nbsp; ת.ז: {fm_idnum}" if fm_idnum else ""
+                        rel_part = f" &nbsp;|&nbsp; {fm_relation}" if fm_relation else ""
                         st.markdown(f'''
                         <div class="note-item">
-                          <div class="note-text">👤 {fm_name}{id_part}</div>
+                          <div class="note-text">👤 {fm_name}{rel_part}{id_part}</div>
                         </div>
                         ''', unsafe_allow_html=True)
                     with col_fm2:
@@ -1180,7 +1210,7 @@ else:
         st.markdown('</div>', unsafe_allow_html=True)
 
     # --- חיפוש ---
-    search_term = st.text_input("🔍 חיפוש לפי שם, טלפון או תעודת זהות", key="client_search")
+    search_term = st.text_input("🔍 חיפוש לפי שם, טלפון, תעודת זהות (גם של בני משפחה)", key="client_search")
 
     # --- טבלת לקוחות ---
     st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -1233,9 +1263,17 @@ else:
                     conn.close()
                     st.rerun()
             with cols[5]:
-                category_html = (f'<span class="{CATEGORY_BADGE_CLASS.get(row["category"], "")}">{row["category"]}</span>'
-                                  if row['category'] else '<span style="color:#c7c2b3">—</span>')
-                st.markdown(category_html, unsafe_allow_html=True)
+                c_idx = CATEGORY_OPTIONS.index(row['category']) if row['category'] in CATEGORY_OPTIONS else 0
+                sel_category = st.selectbox("סיווג", CATEGORY_OPTIONS, index=c_idx,
+                                             key=f"list_category_{cid}", label_visibility="collapsed")
+                if sel_category != row['category']:
+                    conn = sqlite3.connect('crm.db')
+                    conn.execute(
+                        "UPDATE clients SET category=?, updated_at=datetime('now','localtime') WHERE id=?",
+                        (sel_category, cid))
+                    conn.commit()
+                    conn.close()
+                    st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
