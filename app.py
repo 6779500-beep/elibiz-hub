@@ -1,5 +1,7 @@
 import streamlit as st
 import sqlite3
+import psycopg2
+import psycopg2.extensions
 import pandas as pd
 import imaplib
 import email
@@ -255,25 +257,42 @@ h1, h2, h3 { color: #1f2440; }
 </style>
 """)
 
-# --- תשתית מסד נתונים ---
+# --- תשתית מסד נתונים (Postgres קבוע ב-Supabase, לא דיסק זמני) ---
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+class Connection(psycopg2.extensions.connection):
+    """מתאם שמוסיף ל-psycopg2 ממשק execute() דמוי-sqlite3, כדי לא לשנות את כל הקריאות בקוד."""
+    def execute(self, sql, params=None):
+        cur = self.cursor()
+        sql = sql.replace("?", "%s")
+        if params:
+            cur.execute(sql, params)
+        else:
+            cur.execute(sql)
+        return cur
+
+def get_conn():
+    conn = psycopg2.connect(st.secrets["SUPABASE_DB_URL"], connection_factory=Connection)
+    conn.cursor().execute("SET TIME ZONE 'Asia/Jerusalem'")
+    return conn
+
 def init_db():
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     c = conn.cursor()
 
     # טבלת לקוחות
     c.execute('''CREATE TABLE IF NOT EXISTS clients (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         name TEXT,
         phone TEXT UNIQUE,
-        status TEXT DEFAULT "חדש",
-        created_at TEXT DEFAULT (datetime('now','localtime'))
+        status TEXT DEFAULT 'חדש',
+        created_at TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS'))
     )''')
 
     # מיגרציה: עמודות נוספות לכרטיס לקוח (מצורפות בבטחה לטבלה קיימת)
-    existing_cols = {row[1] for row in c.execute("PRAGMA table_info(clients)").fetchall()}
+    c.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'clients'")
+    existing_cols = {row[0] for row in c.fetchall()}
     for col_name, col_def in [
         ("id_number", "TEXT DEFAULT ''"),
         ("phone2", "TEXT DEFAULT ''"),
@@ -291,56 +310,57 @@ def init_db():
 
     # טבלת היסטוריית סטטוס
     c.execute('''CREATE TABLE IF NOT EXISTS status_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         client_id INTEGER,
         old_status TEXT,
         new_status TEXT,
-        changed_at TEXT DEFAULT (datetime('now','localtime')),
+        changed_at TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
         FOREIGN KEY(client_id) REFERENCES clients(id)
     )''')
 
     # טבלת בני משפחה
     c.execute('''CREATE TABLE IF NOT EXISTS family_members (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         client_id INTEGER,
         name TEXT,
         id_number TEXT,
         relation TEXT DEFAULT '',
-        created_at TEXT DEFAULT (datetime('now','localtime')),
+        created_at TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
         FOREIGN KEY(client_id) REFERENCES clients(id)
     )''')
-    family_cols = {row[1] for row in c.execute("PRAGMA table_info(family_members)").fetchall()}
+    c.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'family_members'")
+    family_cols = {row[0] for row in c.fetchall()}
     if "relation" not in family_cols:
         c.execute("ALTER TABLE family_members ADD COLUMN relation TEXT DEFAULT ''")
 
     # טבלת הערות
     c.execute('''CREATE TABLE IF NOT EXISTS notes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         client_id INTEGER,
         content TEXT,
-        created_at TEXT DEFAULT (datetime('now','localtime')),
+        created_at TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
         FOREIGN KEY(client_id) REFERENCES clients(id)
     )''')
 
     # טבלת משימות
     c.execute('''CREATE TABLE IF NOT EXISTS tasks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         client_id INTEGER,
         description TEXT,
         due_date TEXT,
         is_done INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now','localtime')),
-        updated_at TEXT DEFAULT (datetime('now','localtime')),
+        created_at TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
+        updated_at TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
         FOREIGN KEY(client_id) REFERENCES clients(id)
     )''')
 
     # טבלת קבצים
     c.execute('''CREATE TABLE IF NOT EXISTS files (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         client_id INTEGER,
         filename TEXT,
         filepath TEXT,
-        uploaded_at TEXT DEFAULT (datetime('now','localtime')),
+        uploaded_at TEXT DEFAULT (to_char(now(), 'YYYY-MM-DD HH24:MI:SS')),
         FOREIGN KEY(client_id) REFERENCES clients(id)
     )''')
 
@@ -350,7 +370,7 @@ def init_db():
 # --- מנוע סנכרון מייל ---
 def sync_data():
     try:
-        conn = sqlite3.connect('crm.db')
+        conn = get_conn()
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(st.secrets["EMAIL_ACCOUNT"], st.secrets["APP_PASSWORD"])
         mail.select("inbox")
@@ -379,14 +399,17 @@ def sync_data():
                 try:
                     conn.execute("INSERT INTO clients (name, phone) VALUES (?, ?)",
                                  (lead_name, phone_value))
+                    conn.commit()
                     count += 1
-                except sqlite3.IntegrityError:
+                except psycopg2.IntegrityError:
+                    conn.rollback()
                     existing = conn.execute(
                         "SELECT id FROM clients WHERE phone=?", (phone_value,)).fetchone()
                     if existing:
                         conn.execute(
                             "INSERT INTO notes (client_id, content) VALUES (?,?)",
                             (existing[0], f"התקבלה פנייה נוספת מהמייל ({lead_name})."))
+                        conn.commit()
             mail.store(num, "+FLAGS", "\\Seen")
 
         conn.execute(
@@ -399,7 +422,7 @@ def sync_data():
 
 # --- שאילתות עזר ---
 def get_clients(search=""):
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     query = "SELECT id, name, phone, phone2, id_number, status, priority, category, created_at FROM clients"
     params = ()
     if search.strip():
@@ -408,12 +431,12 @@ def get_clients(search=""):
         like = f"%{search.strip()}%"
         params = (like, like, like, like, like, like, like)
     query += " ORDER BY id DESC"
-    df = pd.read_sql_query(query, conn, params=params)
+    df = pd.read_sql_query(query.replace("?", "%s"), conn, params=params if params else None)
     conn.close()
     return df
 
 def get_alerts():
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     today = date.today().isoformat()
     new_count = conn.execute("SELECT COUNT(*) FROM clients WHERE status='חדש'").fetchone()[0]
     urgent_tasks = conn.execute(
@@ -427,7 +450,7 @@ def get_alerts():
     return new_count, urgent_tasks, due_followups
 
 def get_urgent_tasks():
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     today = date.today().isoformat()
     rows = conn.execute("""
         SELECT t.id, t.description, t.due_date, c.name, c.id
@@ -439,7 +462,7 @@ def get_urgent_tasks():
     return rows
 
 def get_due_followups():
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     today = date.today().isoformat()
     rows = conn.execute("""
         SELECT id, name, follow_up_date FROM clients
@@ -450,7 +473,7 @@ def get_due_followups():
     return rows
 
 def get_new_leads():
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     rows = conn.execute(
         "SELECT id, name, phone, created_at FROM clients WHERE status='חדש' ORDER BY created_at DESC"
     ).fetchall()
@@ -458,7 +481,7 @@ def get_new_leads():
     return rows
 
 def add_note(client_id, content):
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     conn.execute("INSERT INTO notes (client_id, content) VALUES (?,?)", (client_id, content))
     conn.commit()
     conn.close()
@@ -466,7 +489,7 @@ def add_note(client_id, content):
 def log_status_change(client_id, old_status, new_status):
     if old_status == new_status:
         return
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     conn.execute(
         "INSERT INTO status_history (client_id, old_status, new_status) VALUES (?,?,?)",
         (client_id, old_status, new_status))
@@ -475,8 +498,8 @@ def log_status_change(client_id, old_status, new_status):
 
 def touch_and_bump(client_id):
     """מסמן עדכון אחרון, ואם הלקוח עדיין בסטטוס 'חדש' מעלה אותו אוטומטית ל'בטיפול'."""
-    conn = sqlite3.connect('crm.db')
-    conn.execute("UPDATE clients SET updated_at=datetime('now','localtime') WHERE id=?", (client_id,))
+    conn = get_conn()
+    conn.execute("UPDATE clients SET updated_at=to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id=?", (client_id,))
     row = conn.execute("SELECT status FROM clients WHERE id=?", (client_id,)).fetchone()
     if row and row[0] == "חדש":
         conn.execute("UPDATE clients SET status='בטיפול' WHERE id=?", (client_id,))
@@ -488,7 +511,7 @@ def touch_and_bump(client_id):
     conn.close()
 
 def get_status_history(client_id):
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     rows = conn.execute(
         "SELECT old_status, new_status, changed_at FROM status_history WHERE client_id=? ORDER BY changed_at DESC",
         (client_id,)).fetchall()
@@ -496,7 +519,7 @@ def get_status_history(client_id):
     return rows
 
 def get_stats():
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     total = conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
     week_ago = (date.today().toordinal() - 7)
     week_ago_str = date.fromordinal(week_ago).isoformat()
@@ -542,8 +565,91 @@ def send_daily_digest():
         server.login(st.secrets["EMAIL_ACCOUNT"], st.secrets["APP_PASSWORD"])
         server.send_message(msg)
 
+def export_backup_sqlite():
+    """מייצא את כל הטבלאות מ-Postgres לקובץ SQLite זמני, לצורך גיבוי/הורדה."""
+    import tempfile
+    pg = get_conn()
+    tmp_path = tempfile.mktemp(suffix=".db")
+    local = sqlite3.connect(tmp_path)
+    for table in ["clients", "notes", "tasks", "family_members", "status_history", "files"]:
+        cur = pg.execute(f"SELECT * FROM {table}")
+        cols = [desc[0] for desc in cur.description]
+        rows = cur.fetchall()
+        col_defs = ", ".join(f'"{c}"' for c in cols)
+        local.execute(f'CREATE TABLE "{table}" ({col_defs})')
+        if rows:
+            placeholders = ",".join(["?"] * len(cols))
+            local.executemany(f'INSERT INTO "{table}" VALUES ({placeholders})', rows)
+    local.commit()
+    local.close()
+    pg.close()
+    with open(tmp_path, "rb") as f:
+        data = f.read()
+    os.remove(tmp_path)
+    return data
+
+def import_legacy_backup(file_bytes):
+    """משחזר נתונים מקובץ גיבוי SQLite (מהמערכת הישנה או מ-export_backup_sqlite) לתוך Postgres.
+    מתעלם מכפילויות טלפון (ממזג ידני לא מתבצע כאן, רק דילוג)."""
+    import tempfile
+    tmp_path = tempfile.mktemp(suffix=".db")
+    with open(tmp_path, "wb") as f:
+        f.write(file_bytes)
+    old = sqlite3.connect(tmp_path)
+    old.row_factory = sqlite3.Row
+    new = get_conn()
+    id_map = {}
+    imported, skipped = 0, 0
+
+    for oc in old.execute("SELECT * FROM clients").fetchall():
+        keys = oc.keys()
+        def g(col, default=""):
+            return oc[col] if col in keys and oc[col] is not None else default
+        try:
+            cur = new.execute(
+                """INSERT INTO clients (name, phone, status, id_number, phone2, phone2_label,
+                   phone3, phone3_label, follow_up_date, priority, category, address)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
+                (g("name"), g("phone"), g("status", "חדש"), g("id_number"), g("phone2"),
+                 g("phone2_label"), g("phone3"), g("phone3_label"), g("follow_up_date"),
+                 g("priority"), g("category"), g("address")))
+            id_map[oc["id"]] = cur.fetchone()[0]
+            new.commit()
+            imported += 1
+        except psycopg2.IntegrityError:
+            new.rollback()
+            existing = new.execute("SELECT id FROM clients WHERE phone=?", (g("phone"),)).fetchone()
+            if existing:
+                id_map[oc["id"]] = existing[0]
+            skipped += 1
+
+    for table, cols in [
+        ("notes", ["content"]),
+        ("tasks", ["description", "due_date", "is_done"]),
+        ("family_members", ["name", "id_number", "relation"]),
+    ]:
+        try:
+            old_rows = old.execute(f"SELECT * FROM {table}").fetchall()
+        except sqlite3.OperationalError:
+            continue
+        for r in old_rows:
+            old_client_id = r["client_id"]
+            if old_client_id not in id_map:
+                continue
+            values = [r[c] if c in r.keys() and r[c] is not None else "" for c in cols]
+            placeholders = ",".join(["?"] * (len(cols) + 1))
+            new.execute(
+                f"INSERT INTO {table} (client_id, {','.join(cols)}) VALUES ({placeholders})",
+                (id_map[old_client_id], *values))
+            new.commit()
+
+    old.close()
+    new.close()
+    os.remove(tmp_path)
+    return imported, skipped
+
 def find_duplicate_clients(name="", phone="", id_number="", exclude_id=None):
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     matches = {}
     if phone:
         for row in conn.execute(
@@ -566,13 +672,13 @@ def find_duplicate_clients(name="", phone="", id_number="", exclude_id=None):
     return list(matches.values())
 
 def get_client(client_id):
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     row = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
     conn.close()
     return row
 
 def get_notes(client_id):
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     rows = conn.execute(
         "SELECT id, content, created_at FROM notes WHERE client_id=? ORDER BY created_at DESC",
         (client_id,)).fetchall()
@@ -580,7 +686,7 @@ def get_notes(client_id):
     return rows
 
 def get_tasks(client_id):
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     rows = conn.execute(
         "SELECT id, description, due_date, is_done, created_at, updated_at FROM tasks WHERE client_id=? ORDER BY is_done, due_date",
         (client_id,)).fetchall()
@@ -588,7 +694,7 @@ def get_tasks(client_id):
     return rows
 
 def get_files(client_id):
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     rows = conn.execute(
         "SELECT id, filename, filepath, uploaded_at FROM files WHERE client_id=? ORDER BY uploaded_at DESC",
         (client_id,)).fetchall()
@@ -596,7 +702,7 @@ def get_files(client_id):
     return rows
 
 def get_family_members(client_id):
-    conn = sqlite3.connect('crm.db')
+    conn = get_conn()
     rows = conn.execute(
         "SELECT id, name, id_number, relation, created_at FROM family_members WHERE client_id=? ORDER BY created_at",
         (client_id,)).fetchall()
@@ -847,12 +953,12 @@ elif selected_client_id is not None and get_client(selected_client_id):
 
             if st.button("💾 שמור פרטים", key=f"save_details_{client_id}"):
                 final_status = "בטיפול" if new_status == "חדש" else new_status
-                conn = sqlite3.connect('crm.db')
+                conn = get_conn()
                 try:
                     conn.execute(
                         """UPDATE clients SET name=?, phone=?, status=?, id_number=?,
                            phone2=?, phone2_label=?, phone3=?, phone3_label=?, follow_up_date=?,
-                           priority=?, category=?, address=?, updated_at=datetime('now','localtime')
+                           priority=?, category=?, address=?, updated_at=to_char(now(), 'YYYY-MM-DD HH24:MI:SS')
                            WHERE id=?""",
                         (new_name, new_phone, final_status, new_id_number,
                          new_phone2, new_phone2_label, new_phone3, new_phone3_label,
@@ -865,7 +971,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
                         st.info("הסטטוס עודכן אוטומטית ל'בטיפול' (לא ניתן לשמור שינוי ולהישאר ב'חדש').")
                     st.success("הפרטים נשמרו!")
                     st.rerun()
-                except sqlite3.IntegrityError:
+                except psycopg2.IntegrityError:
                     st.error("מספר הטלפון כבר קיים במערכת.")
                 finally:
                     conn.close()
@@ -886,7 +992,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
                     family_relation = st.selectbox("קרבה", options=FAMILY_RELATION_OPTIONS)
                 if st.form_submit_button("➕ הוסף בן משפחה"):
                     if family_name.strip():
-                        conn = sqlite3.connect('crm.db')
+                        conn = get_conn()
                         conn.execute(
                             "INSERT INTO family_members (client_id, name, id_number, relation) VALUES (?,?,?,?)",
                             (client_id, family_name.strip(), family_id_number.strip(), family_relation))
@@ -912,7 +1018,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
                         ''', unsafe_allow_html=True)
                     with col_fm2:
                         if st.button("🗑", key=f"del_family_{fm_id}"):
-                            conn = sqlite3.connect('crm.db')
+                            conn = get_conn()
                             conn.execute("DELETE FROM family_members WHERE id=?", (fm_id,))
                             conn.commit()
                             conn.close()
@@ -938,7 +1044,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
                 filepath = os.path.join(client_dir, safe_name)
                 with open(filepath, "wb") as f:
                     f.write(uploaded_file.getbuffer())
-                conn = sqlite3.connect('crm.db')
+                conn = get_conn()
                 conn.execute(
                     "INSERT INTO files (client_id, filename, filepath) VALUES (?,?,?)",
                     (client_id, uploaded_file.name, filepath))
@@ -968,7 +1074,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
                                 os.remove(f_path)
                             except:
                                 pass
-                            conn = sqlite3.connect('crm.db')
+                            conn = get_conn()
                             conn.execute("DELETE FROM files WHERE id=?", (f_id,))
                             conn.commit()
                             conn.close()
@@ -1030,7 +1136,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
                         ''', unsafe_allow_html=True)
                     with col_n2:
                         if st.button("🗑", key=f"del_note_{n_id}"):
-                            conn = sqlite3.connect('crm.db')
+                            conn = get_conn()
                             conn.execute("DELETE FROM notes WHERE id=?", (n_id,))
                             conn.commit()
                             conn.close()
@@ -1065,7 +1171,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
                 if st.form_submit_button("➕ הוסף משימה"):
                     if task_desc.strip():
                         due_str = task_due.isoformat() if task_due else ""
-                        conn = sqlite3.connect('crm.db')
+                        conn = get_conn()
                         conn.execute(
                             "INSERT INTO tasks (client_id, description, due_date) VALUES (?,?,?)",
                             (client_id, task_desc.strip(), due_str))
@@ -1088,9 +1194,9 @@ elif selected_client_id is not None and get_client(selected_client_id):
                     with col_chk:
                         new_done = st.checkbox("", value=bool(t_done), key=f"task_done_{t_id}")
                         if new_done != bool(t_done):
-                            conn = sqlite3.connect('crm.db')
+                            conn = get_conn()
                             conn.execute(
-                                "UPDATE tasks SET is_done=?, updated_at=datetime('now','localtime') WHERE id=?",
+                                "UPDATE tasks SET is_done=?, updated_at=to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id=?",
                                 (1 if new_done else 0, t_id))
                             conn.commit()
                             conn.close()
@@ -1116,7 +1222,7 @@ elif selected_client_id is not None and get_client(selected_client_id):
                                 unsafe_allow_html=True)
                     with col_del:
                         if st.button("🗑", key=f"del_task_{t_id}"):
-                            conn = sqlite3.connect('crm.db')
+                            conn = get_conn()
                             conn.execute("DELETE FROM tasks WHERE id=?", (t_id,))
                             conn.commit()
                             conn.close()
@@ -1142,11 +1248,15 @@ else:
     with col_stats:
         st.markdown('<a href="?view=stats" target="_self"><button style="width:100%;padding:10px;border-radius:8px;border:1px solid #c9a227;background:linear-gradient(135deg,#1f2440,#2b3160);color:#f3e9c8;font-weight:600;cursor:pointer">📊 סטטיסטיקות</button></a>', unsafe_allow_html=True)
     with col_backup:
-        try:
-            with open("crm.db", "rb") as f:
-                st.download_button("📥 הורד גיבוי", f.read(), file_name=f"crm_backup_{date.today().isoformat()}.db")
-        except FileNotFoundError:
-            pass
+        if st.button("📥 הכן גיבוי"):
+            try:
+                st.session_state["backup_data"] = export_backup_sqlite()
+            except Exception as e:
+                st.error(f"שגיאה בהכנת הגיבוי: {e}")
+        if st.session_state.get("backup_data"):
+            st.download_button(
+                "⬇ שמור גיבוי", st.session_state["backup_data"],
+                file_name=f"crm_backup_{date.today().isoformat()}.db")
     with col_digest:
         if st.button("📧 שלח סיכום במייל"):
             try:
@@ -1154,6 +1264,17 @@ else:
                 st.success("הסיכום נשלח למייל שלך!")
             except Exception as e:
                 st.error(f"שגיאה בשליחה: {e}")
+
+    with st.expander("🗄️ שחזור גיבוי ישן (חד פעמי)"):
+        st.caption("העלה קובץ גיבוי SQLite (.db) ששמרת בעבר, כדי לשחזר לקוחות/הערות/משימות/בני משפחה לתוך המערכת.")
+        legacy_file = st.file_uploader("בחר קובץ גיבוי", type=["db"], key="legacy_backup_upload")
+        if legacy_file and st.button("שחזר נתונים מהגיבוי"):
+            try:
+                imported, skipped = import_legacy_backup(legacy_file.getvalue())
+                st.success(f"שוחזרו {imported} לקוחות (כולל הערות/משימות/בני משפחה). {skipped} דולגו כי כבר קיימים (טלפון תואם).")
+                st.rerun()
+            except Exception as e:
+                st.error(f"שגיאה בשחזור: {e}")
 
     # --- טופס הוספת לקוח ידנית ---
     if st.session_state.get("show_add_form"):
@@ -1189,7 +1310,7 @@ else:
                     st.session_state["dup_matches"] = other_matches
                     st.rerun()
                 else:
-                    conn = sqlite3.connect('crm.db')
+                    conn = get_conn()
                     try:
                         conn.execute(
                             "INSERT INTO clients (name, phone, id_number) VALUES (?,?,?)",
@@ -1198,7 +1319,7 @@ else:
                         st.session_state["show_add_form"] = False
                         st.success("הלקוח נוסף בהצלחה!")
                         st.rerun()
-                    except sqlite3.IntegrityError:
+                    except psycopg2.IntegrityError:
                         st.error("מספר הטלפון כבר קיים במערכת.")
                     finally:
                         conn.close()
@@ -1226,7 +1347,7 @@ else:
             if st.button("🔗 מזג לתיק הקיים"):
                 existing_id = dup_matches[0][0]
                 add_note(existing_id, f"מוזגה פנייה ידנית: '{pending['name']}', טלפון {pending['phone']}.")
-                conn = sqlite3.connect('crm.db')
+                conn = get_conn()
                 row = conn.execute("SELECT id_number, phone2 FROM clients WHERE id=?", (existing_id,)).fetchone()
                 if pending["id_number"] and not row[0]:
                     conn.execute("UPDATE clients SET id_number=? WHERE id=?", (pending["id_number"], existing_id))
@@ -1241,7 +1362,7 @@ else:
                 st.rerun()
         with col_separate:
             if st.button("📁 השאר כתיק נפרד"):
-                conn = sqlite3.connect('crm.db')
+                conn = get_conn()
                 try:
                     conn.execute(
                         "INSERT INTO clients (name, phone, id_number) VALUES (?,?,?)",
@@ -1252,7 +1373,7 @@ else:
                     st.session_state["show_add_form"] = False
                     st.success("נפתח תיק לקוח נפרד.")
                     st.rerun()
-                except sqlite3.IntegrityError:
+                except psycopg2.IntegrityError:
                     st.error("מספר הטלפון כבר קיים במערכת.")
                 finally:
                     conn.close()
@@ -1286,9 +1407,9 @@ else:
                 s_idx = STATUS_OPTIONS.index(row['status']) if row['status'] in STATUS_OPTIONS else 0
                 sel_status = st.selectbox("סטטוס", STATUS_OPTIONS, index=s_idx, key=f"list_status_{cid}")
                 if sel_status != row['status']:
-                    conn = sqlite3.connect('crm.db')
+                    conn = get_conn()
                     conn.execute(
-                        "UPDATE clients SET status=?, updated_at=datetime('now','localtime') WHERE id=?",
+                        "UPDATE clients SET status=?, updated_at=to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id=?",
                         (sel_status, cid))
                     conn.commit()
                     conn.close()
@@ -1298,9 +1419,9 @@ else:
                 p_idx = PRIORITY_OPTIONS.index(row['priority']) if row['priority'] in PRIORITY_OPTIONS else 0
                 sel_priority = st.selectbox("תיעדוף", PRIORITY_OPTIONS, index=p_idx, key=f"list_priority_{cid}")
                 if sel_priority != row['priority']:
-                    conn = sqlite3.connect('crm.db')
+                    conn = get_conn()
                     conn.execute(
-                        "UPDATE clients SET priority=?, updated_at=datetime('now','localtime') WHERE id=?",
+                        "UPDATE clients SET priority=?, updated_at=to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id=?",
                         (sel_priority, cid))
                     conn.commit()
                     conn.close()
@@ -1309,9 +1430,9 @@ else:
                 c_idx = CATEGORY_OPTIONS.index(row['category']) if row['category'] in CATEGORY_OPTIONS else 0
                 sel_category = st.selectbox("סיווג", CATEGORY_OPTIONS, index=c_idx, key=f"list_category_{cid}")
                 if sel_category != row['category']:
-                    conn = sqlite3.connect('crm.db')
+                    conn = get_conn()
                     conn.execute(
-                        "UPDATE clients SET category=?, updated_at=datetime('now','localtime') WHERE id=?",
+                        "UPDATE clients SET category=?, updated_at=to_char(now(), 'YYYY-MM-DD HH24:MI:SS') WHERE id=?",
                         (sel_category, cid))
                     conn.commit()
                     conn.close()
